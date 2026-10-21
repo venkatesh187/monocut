@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MonoCut — Minimal Fast Video Editor</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <!-- Feather Icons -->
+  <script src="https://unpkg.com/feather-icons"></script>
+</head>
+<body>
+  <div id="app" class="app-container">
+    
+    <!-- FULL WINDOW DRAG OVERLAY -->
+    <div id="dragDropOverlay" class="drag-drop-overlay" style="display: none;">
+      <div class="drag-drop-box">
+        <i data-feather="upload-cloud"></i>
+        <h2>Drop Video Anywhere to Edit</h2>
+        <p>4K 60fps WebM (VP9) / MP4</p>
+      </div>
+    </div>
+
+    <!-- TOP HEADER -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="brand">
+          <div class="brand-indicator"></div>
+          <span class="brand-title">MONOCUT</span>
+          <span class="brand-badge">4K PRO</span>
+        </div>
+
+        <div class="header-divider"></div>
+
+        <!-- Aspect Ratio Selector -->
+        <div class="aspect-picker">
+          <button class="aspect-tab active" data-ratio="16:9" id="tab169">
+            <i data-feather="monitor"></i>
+            <span>16:9 Landscape</span>
+          </button>
+          <button class="aspect-tab" data-ratio="9:16" id="tab916">
+            <i data-feather="smartphone"></i>
+            <span>9:16 YouTube Shorts</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- File Metadata (Visible once file is loaded) -->
+      <div class="header-center" id="fileMetaPill" style="display: none;">
+        <span class="file-title" id="metaFileName">video.webm</span>
+        <div class="pills-group">
+          <span class="meta-tag" id="metaResolution">3840×2160</span>
+          <span class="meta-tag" id="metaFps">59.94 FPS</span>
+          <span class="meta-tag" id="metaCodec">VP9 / Opus</span>
+        </div>
+      </div>
+
+      <!-- Header Action Buttons -->
+      <div class="header-right">
+        <button class="btn btn-secondary" id="btnOpenVideo" title="Open or replace video sequence">
+          <i data-feather="folder"></i>
+          <span>Open Video(s)</span>
+        </button>
+        <button class="btn btn-secondary" id="btnAddVideosHeader" title="Add more video clips to the timeline sequence" style="display: none;">
+          <i data-feather="plus"></i>
+          <span>+ Add Videos</span>
+        </button>
+        <button class="btn btn-primary" id="btnOpenExport" disabled>
+          <i data-feather="download"></i>
+          <span>Export 16:9</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- MAIN EDITING WORKSPACE -->
+    <main class="main-workspace">
+      
+      <!-- DEDICATED SHORTS CONTROL SUB-BAR (Placed cleanly above preview, never blocking video) -->
+      <div class="shorts-control-bar" id="shortsControlBar" style="display: none;">
+        <div class="scb-section">
+          <span class="scb-label"><i data-feather="crosshair"></i> Framing:</span>
+          <div class="preset-group">
+            <button class="preset-pill" data-preset="0.0">Left</button>
+            <button class="preset-pill active" data-preset="0.5">Center</button>
+            <button class="preset-pill" data-preset="1.0">Right</button>
+          </div>
+          <div class="slider-group">
+            <span class="pan-sub-label">Pan:</span>
+            <input type="range" id="cropPanSlider" min="0" max="100" value="50" class="mini-slider pan-slider">
+            <span id="cropPanVal">50%</span>
+          </div>
+        </div>
+
+        <div class="scb-divider"></div>
+
+        <div class="scb-section">
+          <span class="scb-label"><i data-feather="activity"></i> Auto-Pan:</span>
+          <div class="motion-pan-group">
+            <button class="motion-btn active" data-motion="static">Static</button>
+            <button class="motion-btn" data-motion="pan-lr" title="Smooth Pan Left to Right across clip">L ➔ R</button>
+            <button class="motion-btn" data-motion="pan-rl" title="Smooth Pan Right to Left across clip">R ➔ L</button>
+          </div>
+        </div>
+
+        <div class="scb-divider"></div>
+
+        <div class="scb-section">
+          <span class="scb-label"><i data-feather="shield"></i> Guide:</span>
+          <button class="sz-toggle-btn" id="btnToggleSafeZone" title="Toggle YouTube Shorts UI Safe Zone Overlay">
+            <i data-feather="eye" id="szIcon"></i>
+            <span>YouTube Shorts Safe Zone</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- VIDEO PREVIEW VIEWPORT -->
+      <section class="preview-section" id="previewSection">
+        
+        <!-- Center Player Box (Full 16:9 Landscape Canvas by default) -->
+        <div class="player-container" id="playerContainer" data-aspect="16:9">
+          
+          <!-- HTML5 Hardware-Accelerated Video -->
+          <video id="mainVideo" playsinline preload="auto" crossorigin="anonymous"></video>
+
+          <!-- YouTube Shorts Safe Zone UI Overlay (Subtle, Clean & Translucent) -->
+          <div id="safeZoneOverlayYT" class="safe-zone-mockup yt" style="display: none;">
+            <div class="sz-top-header">
+              <span class="sz-yt-badge">Shorts</span>
+            </div>
+            
+            <div class="sz-right-column">
+              <div class="sz-icon-circle"><i data-feather="thumbs-up"></i></div>
+              <div class="sz-icon-circle"><i data-feather="thumbs-down"></i></div>
+              <div class="sz-icon-circle"><i data-feather="message-square"></i></div>
+              <div class="sz-icon-circle"><i data-feather="share-2"></i></div>
+              <div class="sz-icon-circle"><i data-feather="disc"></i></div>
+            </div>
+
+            <div class="sz-bottom-caption">
+              <div class="sz-user-pill">@channel &bull; Subscribe</div>
+              <div class="sz-text-line">#shorts Title & description safe zone</div>
+            </div>
+          </div>
+
+          <!-- Subtle Drag-To-Pan Floating Helper (Fades after load) -->
+          <div class="drag-cue-badge" id="dragCueBadge">
+            <i data-feather="move"></i>
+            <span>Drag video left/right to pan framing</span>
+          </div>
+
+        </div>
+
+        <!-- EMPTY STATE (WELCOME / DROPZONE - Full Workspace Overlay) -->
+        <div class="empty-workspace" id="emptyWorkspace">
+          <div class="empty-dialog">
+            <div class="empty-icon-circle">
+              <i data-feather="video"></i>
+            </div>
+            <h2>Open Video to Start Editing</h2>
+            <p>Ultra-fast trimming and splitting for <strong>4K 60fps WebM (VP9 / Opus)</strong> & <strong>MP4</strong></p>
+            
+            <div class="empty-buttons">
+              <button class="btn btn-primary btn-large" id="btnSelectFile">
+                <i data-feather="folder-plus"></i>
+                <span>Select Video File(s)</span>
+              </button>
+              <button class="btn btn-secondary btn-large" id="btnEnterPath">
+                <i data-feather="file-text"></i>
+                <span>Enter File Path</span>
+              </button>
+            </div>
+            <span class="drop-hint-sub">or drag & drop single or multiple videos anywhere into this window</span>
+            <input type="file" id="hiddenFileInput" accept="video/webm,video/mp4,video/mkv,video/quicktime" multiple style="display: none;">
+            <input type="file" id="addClipFileInput" accept="video/webm,video/mp4,video/mkv,video/quicktime" multiple style="display: none;">
+          </div>
+        </div>
+
+      </section>
+
+      <!-- PLAYBACK TRANSPORT & TIMECODE BAR -->
+      <div class="transport-bar">
+        <!-- Timecodes with exact millisecond precision -->
+        <div class="timecode-display">
+          <span class="time-current" id="timeCurrent">00:00:00.000</span>
+          <span class="time-divider">/</span>
+          <span class="time-total" id="timeTotal">00:00:00.000</span>
+        </div>
+
+        <!-- Central Playback Controls -->
+        <div class="playback-controls">
+          <button class="ctrl-button" id="btnRewind5s" title="Jump Back 5s (J / Left Arrow)">
+            <i data-feather="rewind"></i>
+          </button>
+          <button class="ctrl-button" id="btnStepPrev" title="Previous Frame (,)">
+            <i data-feather="chevron-left"></i>
+          </button>
+          
+          <button class="ctrl-button play-circle" id="btnPlayPause" title="Play (Space)">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" style="transform: translateX(1px);"><polygon points="6 4 20 12 6 20"></polygon></svg>
+          </button>
+
+          <button class="ctrl-button" id="btnStepNext" title="Next Frame (.)">
+            <i data-feather="chevron-right"></i>
+          </button>
+          <button class="ctrl-button" id="btnForward5s" title="Jump Forward 5s (L / Right Arrow)">
+            <i data-feather="fast-forward"></i>
+          </button>
+
+          <!-- Seamless Loop Preview Toggle -->
+          <button class="ctrl-button loop-toggle" id="btnToggleLoop" title="Seamless Loop Preview (End ➔ Start) [O]">
+            <i data-feather="repeat"></i>
+            <span class="loop-txt">Loop</span>
+          </button>
+
+          <!-- Native 4K Save Paused Frame Snapshot -->
+          <button class="ctrl-button save-frame-btn" id="btnSaveFrame" title="Save current frame as PNG [P]">
+            <i data-feather="camera"></i>
+            <span class="save-frame-txt">Save Frame</span>
+          </button>
+        </div>
+
+        <!-- Audio Volume & Speed Controls -->
+        <div class="transport-extras">
+
+          <div class="volume-container">
+            <button class="icon-toggle" id="btnToggleMute" title="Mute/Unmute (M)">
+              <i data-feather="volume-2" id="volumeIcon"></i>
+            </button>
+            <input type="range" id="volumeSlider" min="0" max="1" step="0.05" value="1" class="mini-slider vol">
+          </div>
+
+          <!-- Playback Speed Control & Custom Speed Popover -->
+          <div class="speed-control-container">
+            <button class="speed-pill" id="btnPlaybackSpeed" title="Playback Speed (Click to adjust or enter custom value)">1.0×</button>
+
+            <!-- Custom Speed Dropdown Popover -->
+            <div class="speed-popover-card" id="speedPopover" style="display: none;">
+              <div class="speed-popover-header">
+                <span class="speed-title"><i data-feather="gauge"></i> Playback Speed</span>
+                <span class="speed-current-val" id="speedCurrentDisplay">1.0×</span>
+              </div>
+
+              <!-- Direct Number Input (User Enters Custom Speed) -->
+              <div class="speed-custom-input-row">
+                <label for="speedCustomInput">Enter Value:</label>
+                <div class="speed-input-box">
+                  <input type="number" id="speedCustomInput" min="0.05" max="16.0" step="0.05" value="1.0" placeholder="1.0">
+                  <span class="speed-unit">×</span>
+                  <button class="btn btn-tiny btn-primary" id="btnApplyCustomSpeed">Apply</button>
+                </div>
+              </div>
+
+              <!-- Slow to Fast Range Slider -->
+              <div class="speed-slider-row">
+                <span class="slider-end-label">0.1×<br><small>Slow</small></span>
+                <input type="range" id="speedRangeSlider" min="0.1" max="5.0" step="0.05" value="1.0" class="speed-slider">
+                <span class="slider-end-label">5.0×<br><small>Fast</small></span>
+              </div>
+
+              <!-- Quick Speed Preset Chips -->
+              <div class="speed-presets-grid">
+                <button class="speed-preset-btn" data-speed="0.25">0.25×</button>
+                <button class="speed-preset-btn" data-speed="0.5">0.5×</button>
+                <button class="speed-preset-btn" data-speed="0.75">0.75×</button>
+                <button class="speed-preset-btn active" data-speed="1.0">1.0×</button>
+                <button class="speed-preset-btn" data-speed="1.25">1.25×</button>
+                <button class="speed-preset-btn" data-speed="1.5">1.5×</button>
+                <button class="speed-preset-btn" data-speed="2.0">2.0×</button>
+                <button class="speed-preset-btn" data-speed="3.0">3.0×</button>
+                <button class="speed-preset-btn" data-speed="4.0">4.0×</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PRIMARY ACTION TOOLBAR (TRIM / SPLIT / PUNCH-IN / DELETE) -->
+      <div class="editing-toolbar">
+        <div class="tools-left">
+          <button class="action-btn split-highlight" id="btnSplitClip" title="Split clip at current playhead position (S)">
+            <i data-feather="scissors"></i>
+            <span>Split [S]</span>
+          </button>
+          <button class="action-btn" id="btnTrimIn" title="Set Start of active clip to playhead (I / [)">
+            <i data-feather="corner-down-right"></i>
+            <span>Set Start [I]</span>
+          </button>
+          <button class="action-btn" id="btnTrimOut" title="Set End of active clip to playhead (O / ])">
+            <i data-feather="corner-down-left"></i>
+            <span>Set End [O]</span>
+          </button>
+
+          <button class="action-btn active" id="btnToggleSnap" title="Magnetic Snapping to Edits (N)">
+            <i data-feather="zap"></i>
+            <span>Snap [N]</span>
+          </button>
+
+          <div class="toolbar-divider"></div>
+
+          <!-- Keyframe Punch-ins & Dynamic Zoom Selector -->
+          <div class="punch-in-selector">
+            <span class="punch-label"><i data-feather="zoom-in"></i> Zoom Punch:</span>
+            <button class="punch-btn active" data-zoom="1.0">1.0×</button>
+            <button class="punch-btn" data-zoom="1.25">1.25×</button>
+            <button class="punch-btn" data-zoom="1.5">1.5×</button>
+          </div>
+
+          <div class="toolbar-divider"></div>
+
+          <button class="action-btn delete-btn" id="btnDeleteClip" title="Delete selected clip (Del)">
+            <i data-feather="trash-2"></i>
+            <span>Delete [Del]</span>
+          </button>
+        </div>
+
+        <div class="tools-right">
+          <button class="action-btn icon-btn" id="btnUndoAction" title="Undo (Ctrl+Z)" disabled>
+            <i data-feather="rotate-ccw"></i>
+          </button>
+          <button class="action-btn icon-btn" id="btnRedoAction" title="Redo (Ctrl+Y)" disabled>
+            <i data-feather="rotate-cw"></i>
+          </button>
+          <button class="action-btn icon-btn" id="btnOpenShortcuts" title="Keyboard Shortcuts (?)">
+            <i data-feather="help-circle"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- TIMELINE & CLIPS SEQUENCER (100% FIT-TO-SCREEN) -->
+      <div class="timeline-wrapper">
+        
+        <!-- Track Area with Ruler -->
+        <div class="timeline-scroller" id="timelineScroller">
+          <!-- Time Ruler -->
+          <div class="ruler-bar" id="rulerBar">
+            <canvas id="rulerCanvas" height="26"></canvas>
+          </div>
+
+          <!-- Interactive Track Container -->
+          <div class="track-container" id="trackContainer">
+            <!-- Floating Live Trim Indicator Tooltip -->
+            <div class="trim-indicator-tooltip" id="trimTooltip" style="display: none;">
+              <span class="trim-badge-type" id="trimBadgeType">TRIM IN</span>
+              <span class="trim-badge-time" id="trimBadgeTime">00:00:00.00</span>
+              <span class="trim-badge-delta" id="trimBadgeDelta">+0.00s</span>
+            </div>
+
+            <!-- Clips Sequencer Track -->
+            <div class="clips-sequencer" id="clipsSequencer">
+              <!-- Dynamically populated clips with video filmstrips -->
+            </div>
+          </div>
+
+          <!-- Magnetic Snap Guide Line -->
+          <div class="timeline-snap-guide" id="timelineSnapGuide" style="display: none;"></div>
+
+          <!-- Industry-Standard Playhead Needle & Scrubber Head (Thin White Pin & Line + Live Frame Preview Badge) -->
+          <div class="timeline-playhead" id="timelinePlayhead">
+            <div class="playhead-preview-card" id="playheadThumbPreview">
+              <img id="playheadThumbImg" class="playhead-thumb-img" alt="Scrub Frame" style="display: none;">
+              <div class="playhead-badge" id="playheadLiveBadge">00:00:00.000</div>
+            </div>
+            <div class="playhead-pin" title="Drag Playhead"></div>
+            <div class="playhead-line"></div>
+          </div>
+
+          <!-- Real-time Hover Guide & Tooltip Preview -->
+          <div class="timeline-hover-guide" id="timelineHoverGuide" style="display: none;">
+            <div class="hover-tooltip-card" id="hoverTooltipCard">
+              <img id="hoverThumbImg" class="hover-thumb-img" src="" alt="preview" style="display: none;">
+              <span class="hover-timecode" id="hoverTimecode">00:00:00.000</span>
+            </div>
+            <div class="hover-guide-line"></div>
+          </div>
+        </div>
+
+        <!-- Segments Cards Bar (Below timeline for easy management) -->
+        <div class="segments-tray">
+          <div class="tray-left">
+            <div class="tray-label">
+              <span>CLIPS</span>
+              <button class="btn btn-tiny btn-secondary" id="btnAddClipBtn" title="Add more video clips to sequence">
+                <i data-feather="plus"></i>
+                <span>Add</span>
+              </button>
+            </div>
+            <div class="segments-cards-list" id="segmentsCardsList">
+              <!-- Dynamic cards -->
+            </div>
+          </div>
+
+          <!-- Relocated Read-Only Export Duration Summary Pill -->
+          <div class="export-summary-pill" id="exportSummaryPill">
+            <i data-feather="film"></i>
+            <span>Export Duration: <strong id="summaryDurationText">00:00:00.00</strong></span>
+            <span class="count-badge" id="summaryClipsCount">1 Clip</span>
+            <span class="shorts-cap-badge landscape" id="shortsCapBadge">16:9 Standard Video</span>
+          </div>
+        </div>
+
+      </div>
+
+    </main>
+
+    <!-- EXPORT MODAL -->
+    <div class="modal-backdrop" id="exportModal" style="display: none;">
+      <div class="modal-window wide-export">
+        <div class="modal-top">
+          <div class="modal-heading">
+            <i data-feather="film"></i>
+            <h3>Export Video</h3>
+          </div>
+          <button class="modal-close-x" id="btnCloseExportModal"><i data-feather="x"></i></button>
+        </div>
+
+        <!-- Setup Form -->
+        <div class="modal-content" id="exportSetupSection">
+          
+          <!-- Compact Single-Line Stat Strip -->
+          <div class="export-summary-strip">
+            <span class="strip-pill" id="exportAspectVal">16:9 Landscape</span>
+            <span class="strip-sep">•</span>
+            <span class="strip-pill" id="exportSourceSpecVal">4K 60 FPS (VP9)</span>
+            <span class="strip-sep">•</span>
+            <span class="strip-pill"><span id="exportClipsVal">1 Clip</span> (<span id="exportLengthVal">00:00:00</span>)</span>
+            <span class="strip-sep">•</span>
+            <span class="strip-pill highlight-est" id="exportEstSizeVal">Est. ~15 MB</span>
+          </div>
+
+          <!-- Quick Presets -->
+          <div class="form-block">
+            <label class="form-title">Export Preset</label>
+            <div class="export-mode-cards">
+              
+              <!-- ⚡ Instant Lossless -->
+              <label class="mode-card active" id="cardGodSpeed">
+                <input type="radio" name="exportMode" value="godspeed" checked>
+                <div class="mode-info">
+                  <div class="mode-header">
+                    <span class="mode-name">⚡ Instant Lossless</span>
+                    <span class="speed-tag flash">~0.2s • Copy</span>
+                  </div>
+                  <p class="mode-desc">Direct stream copy with zero quality loss and 0% CPU load.</p>
+                </div>
+              </label>
+
+              <!-- 🚀 Universal MP4 -->
+              <label class="mode-card" id="cardUniversalMp4">
+                <input type="radio" name="exportMode" value="mp4-fast">
+                <div class="mode-info">
+                  <div class="mode-header">
+                    <span class="mode-name">🚀 Universal MP4</span>
+                    <span class="speed-tag">Multi-Core • MP4</span>
+                  </div>
+                  <p class="mode-desc">High-speed parallel encode compatible with every device and editor.</p>
+                </div>
+              </label>
+
+              <!-- 📱 YouTube Shorts & Reels -->
+              <label class="mode-card" id="cardShorts60fps">
+                <input type="radio" name="exportMode" value="shorts-60fps">
+                <div class="mode-info">
+                  <div class="mode-header">
+                    <span class="mode-name">📱 YouTube Shorts & Reels</span>
+                    <span class="speed-tag">9:16 • 60 FPS</span>
+                  </div>
+                  <p class="mode-desc">1080×1920 vertical framing with smooth 60 FPS playback.</p>
+                </div>
+              </label>
+
+            </div>
+          </div>
+
+          <!-- Contextual Output Options & Filename -->
+          <div class="form-block">
+            <!-- Contextual Locked Note (for Instant Lossless & Shorts) -->
+            <div class="locked-settings-note" id="lockedSettingsNote">
+              <i data-feather="lock"></i>
+              <span id="lockedNoteText">Resolution & format locked to source (4K WebM) for instant stream copy.</span>
+            </div>
+
+            <!-- Advanced Dropdowns (revealed smoothly for Universal MP4) -->
+            <div class="form-grid-2" id="advancedDropdownsGrid" style="display: none;">
+              <!-- Resolution -->
+              <div class="form-item">
+                <label class="item-label">Resolution</label>
+                <select id="exportResolutionSelect" class="styled-select">
+                  <option value="source" selected>Source Match (Native 4K / 1080p)</option>
+                  <option value="1080p">1080p Full HD (1920×1080)</option>
+                  <option value="4k">4K Ultra HD (3840×2160)</option>
+                  <option value="720p">720p HD (1280×720)</option>
+                </select>
+              </div>
+
+              <!-- Format -->
+              <div class="form-item">
+                <label class="item-label">Container Format</label>
+                <select id="exportFormatSelect" class="styled-select">
+                  <option value="mp4" selected>MP4 (.mp4) — Universal Compatibility</option>
+                  <option value="webm">WebM (.webm) — YouTube / Web Master</option>
+                  <option value="source">Match Source Container</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Filename Input with Inline Suffix Badge -->
+            <div class="form-item filename-form-item">
+              <label class="item-label">Output Filename (Optional)</label>
+              <div class="filename-input-wrap">
+                <input type="text" id="exportCustomFileName" class="styled-text-input filename-input" placeholder="e.g. My_Edited_Video">
+                <span class="filename-ext-badge" id="exportExtBadge">.mp4</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Modal Footer Actions: Cancel on Left, Primary on Right -->
+          <div class="modal-bottom-actions export-footer">
+            <button class="btn btn-secondary" id="btnDismissExport">Cancel</button>
+            <button class="btn btn-primary btn-godspeed" id="btnExecuteExport">
+              <i data-feather="zap"></i>
+              <span>Export Video</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Live Progress View -->
+        <div class="modal-content" id="exportProgressSection" style="display: none;">
+          <div class="progress-container">
+            <div class="progress-status-line">
+              <span id="exportStageText">Processing video...</span>
+              <span id="exportPercentageText">0%</span>
+            </div>
+            <div class="progress-meter">
+              <div class="meter-bar" id="exportMeterBar" style="width: 0%;"></div>
+            </div>
+            <div class="progress-metrics">
+              <span>Speed: <strong id="exportSpeedMetric">--</strong></span>
+              <span>Time Left: <strong id="exportTimeLeftMetric">--</strong></span>
+            </div>
+            <div class="progress-cancel-wrap" style="margin-top: 14px; text-align: center;">
+              <button class="btn btn-secondary btn-tiny" id="btnCancelActiveExport" title="Cancel active export and clean up">
+                <i data-feather="x-circle"></i>
+                <span>Cancel Export</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Success Box -->
+          <div class="export-success-box" id="exportSuccessBox" style="display: none;">
+            <div class="success-icon-wrap">
+              <i data-feather="check"></i>
+            </div>
+            <h4>Video Exported Successfully!</h4>
+            <p id="finishedFileName">ASTRO_shorts_9x16.mp4</p>
+            <div class="success-action-buttons">
+              <button class="btn btn-secondary" id="btnRevealInFolder">
+                <i data-feather="folder"></i>
+                <span>Open in Explorer</span>
+              </button>
+              <a class="btn btn-primary" id="btnDownloadFinished" href="#" download>
+                <i data-feather="download"></i>
+                <span>Download Video</span>
+              </a>
+              <button class="btn btn-secondary" id="btnFinishExport">Done</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ENTER PATH MODAL -->
+    <div class="modal-backdrop" id="pathInputModal" style="display: none;">
+      <div class="modal-window small">
+        <div class="modal-top">
+          <div class="modal-heading">
+            <i data-feather="file-text"></i>
+            <h3>Enter Video File Path</h3>
+          </div>
+          <button class="modal-close-x" id="btnClosePathModal"><i data-feather="x"></i></button>
+        </div>
+        <div class="modal-content">
+          <p class="modal-subtext">Paste the full path to your video file on your PC:</p>
+          <input type="text" id="filePathField" class="styled-text-input" placeholder="C:\Users\...\video.webm">
+          <div class="modal-bottom-actions">
+            <button class="btn btn-secondary" id="btnCancelPathModal">Cancel</button>
+            <button class="btn btn-primary" id="btnLoadPathSubmit">Open Video</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- KEYBOARD SHORTCUTS MODAL -->
+    <div class="modal-backdrop" id="shortcutsModal" style="display: none;">
+      <div class="modal-window">
+        <div class="modal-top">
+          <div class="modal-heading">
+            <i data-feather="command"></i>
+            <h3>Keyboard Shortcuts</h3>
+          </div>
+          <button class="modal-close-x" id="btnCloseShortcutsModal"><i data-feather="x"></i></button>
+        </div>
+        <div class="modal-content">
+          <div class="shortcuts-table">
+            <div class="sc-row"><span>Play / Pause</span><kbd>Space</kbd></div>
+            <div class="sc-row"><span>Split Clip at Playhead</span><kbd>S</kbd></div>
+            <div class="sc-row"><span>Trim Start to Playhead</span><kbd>[</kbd></div>
+            <div class="sc-row"><span>Trim End to Playhead</span><kbd>]</kbd></div>
+            <div class="sc-row"><span>Toggle Seamless Loop</span><kbd>Shift + O</kbd></div>
+            <div class="sc-row"><span>Save Frame (Snapshot)</span><kbd>P</kbd></div>
+            <div class="sc-row"><span>Toggle Magnetic Snapping</span><kbd>N</kbd></div>
+            <div class="sc-row"><span>Delete Selected Clip</span><kbd>Del</kbd> / <kbd>Backspace</kbd></div>
+            <div class="sc-row"><span>Undo Edit</span><kbd>Ctrl + Z</kbd></div>
+            <div class="sc-row"><span>Redo Edit</span><kbd>Ctrl + Y</kbd></div>
+            <div class="sc-row"><span>Step 1 Frame Back / Forward</span><kbd>,</kbd> / <kbd>.</kbd></div>
+            <div class="sc-row"><span>Jump 5 Seconds Back / Forward</span><kbd>J</kbd> / <kbd>L</kbd></div>
+            <div class="sc-row"><span>Jump to Beginning / End</span><kbd>Home</kbd> / <kbd>End</kbd></div>
+            <div class="sc-row"><span>Mute Audio</span><kbd>M</kbd></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+  </div>
+
+  <!-- JavaScript Modules -->
+  <script src="js/player.js"></script>
+  <script src="js/timeline.js"></script>
+  <script src="js/export.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+    feather.replace();
+  </script>
+</body>
+</html>

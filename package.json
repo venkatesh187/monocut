@@ -1,0 +1,23 @@
+{
+  "name": "minim-cut",
+  "version": "1.0.0",
+  "description": "MonoCut - Ultra-Fast 4K 60FPS Video Editor, Multi-Video Sequence Studio & Shorts Creator",
+  "main": "index.js",
+  "scripts": {
+    "start": "node launcher.js",
+    "server": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "@ffprobe-installer/ffprobe": "^2.1.2",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "multer": "^2.4.0",
+    "open": "^11.0.4",
+    "ws": "^8.21.3"
+  }
+}

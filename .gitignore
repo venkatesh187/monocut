@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Transcoding and export directories
+temp/
+uploads/
+exports/
+
+# Media files
+*.mp4
+*.webm
+*.mov
+*.mkv
+*.avi
+*.m4v
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS and Editor metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

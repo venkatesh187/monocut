@@ -821,13 +821,13 @@ async function runExportPipeline(jobId, options) {
                               (srcExt === '.mp4' && outputFormat === 'mp4') ||
                               (srcExt === '.mkv' && outputFormat === 'mkv');
 
-  // Can we perform instant lossless stream copy ("God Speed" ~0.2s - 1s)?
+  // Can we perform instant lossless stream copy ("God Speed" ~0.2s - 2s)?
+  // High-speed stream copy supported across single or multiple clips / sources when container matches
   const canLossless = (mode === 'godspeed') &&
                       (aspectRatio === '16:9') &&
                       (resolution === 'source') &&
                       !hasZoom &&
                       !hasMotionPan &&
-                      !hasMultipleSources &&
                       !anyMuted &&
                       allSameExt &&
                       formatMatchesSource;
@@ -862,9 +862,14 @@ async function runExportPipeline(jobId, options) {
             if (job.cancelled) throw new Error('Export cancelled by user');
 
             const seg = segments[i];
-            const segSrc = seg.sourcePath || sourcePath;
+            let segSrc = seg.sourcePath || sourcePath;
+            if (!fs.existsSync(segSrc)) {
+              const found = findFileOnSystem(path.basename(segSrc));
+              if (found) segSrc = found;
+            }
             const segDur = Math.max(0.05, seg.end - seg.start);
-            const clipPath = path.join(TEMP_DIR, `clip_${jobId}_${i}${srcExt}`);
+            const segExt = (path.extname(segSrc) || srcExt).toLowerCase();
+            const clipPath = path.join(TEMP_DIR, `clip_${jobId}_${i}${segExt}`);
             tempClips.push(clipPath);
             job.tempFiles.add(clipPath);
 
@@ -904,7 +909,7 @@ async function runExportPipeline(jobId, options) {
 
           if (job.cancelled) throw new Error('Export cancelled by user');
 
-          const concatContent = tempClips.map(p => `file '${path.basename(p)}'`).join('\n');
+          const concatContent = tempClips.map(p => `file '${p.replace(/\\/g, '/')}'`).join('\n');
           fs.writeFileSync(concatListFile, concatContent);
 
           job.stage = 'Joining clips losslessly at God Speed...';
@@ -912,7 +917,7 @@ async function runExportPipeline(jobId, options) {
             '-y',
             '-f', 'concat',
             '-safe', '0',
-            '-i', path.basename(concatListFile),
+            '-i', concatListFile.replace(/\\/g, '/'),
             '-c', 'copy'
           ];
           if (outExt === '.mp4' || outExt === '.mov') {
@@ -1048,15 +1053,15 @@ async function runExportPipeline(jobId, options) {
   let videoCodecArgs = [];
 
   if (isVp9) {
-    // VP9 Constant Quality CRF Mode: Explicit -b:v 0, -deadline good, -cpu-used 4, -row-mt 1 for multi-core scaling
+    // High-Speed Realtime VP9 CRF Mode: -deadline realtime, -cpu-used 8, -row-mt 1 for fast CPU multithreading
     videoCodecArgs = [
       '-c:v', 'libvpx-vp9',
       '-b:v', '0',
-      '-crf', '18',
-      '-deadline', 'good',
-      '-cpu-used', '4',
+      '-crf', '22',
+      '-deadline', 'realtime',
+      '-cpu-used', '8',
       '-row-mt', '1',
-      '-tile-columns', '2',
+      '-tile-columns', '4',
       '-frame-parallel', '1',
       '-threads', '0'
     ];
@@ -1263,14 +1268,14 @@ async function runExportPipeline(jobId, options) {
       job.stage = 'Joining all video clips...';
       job.progress = 88;
       const validClips = tempClips.filter(Boolean);
-      const concatContent = validClips.map(p => `file '${path.basename(p)}'`).join('\n');
+      const concatContent = validClips.map(p => `file '${p.replace(/\\/g, '/')}'`).join('\n');
       fs.writeFileSync(concatListFile, concatContent);
 
       const concatArgs = [
         '-y',
         '-f', 'concat',
         '-safe', '0',
-        '-i', path.basename(concatListFile),
+        '-i', concatListFile.replace(/\\/g, '/'),
         '-c', 'copy'
       ];
       if (outExt === '.mp4' || outExt === '.mov') {

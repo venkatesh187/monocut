@@ -265,9 +265,22 @@ document.addEventListener('DOMContentLoaded', () => {
         const prev = segs[curIdx - 1];
         timeline.activeClipId = prev.id;
         timeline.highlightActive();
-        player.seek(prev.start);
+        if (prev.sourceUri && player.currentSourceUri !== prev.sourceUri) {
+          player.switchSource(prev.sourceUri, prev.start, false);
+        } else {
+          player.seek(prev.start);
+        }
+        timeline.seekToSequenceTime(timeline.getCurrentSequenceTime(), false);
       } else if (segs.length > 0) {
-        player.seek(segs[0].start);
+        const first = segs[0];
+        timeline.activeClipId = first.id;
+        timeline.highlightActive();
+        if (first.sourceUri && player.currentSourceUri !== first.sourceUri) {
+          player.switchSource(first.sourceUri, first.start, false);
+        } else {
+          player.seek(first.start);
+        }
+        timeline.seekToSequenceTime(0, false);
       }
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -277,9 +290,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const next = segs[curIdx + 1];
         timeline.activeClipId = next.id;
         timeline.highlightActive();
-        player.seek(next.start);
+        if (next.sourceUri && player.currentSourceUri !== next.sourceUri) {
+          player.switchSource(next.sourceUri, next.start, false);
+        } else {
+          player.seek(next.start);
+        }
+        timeline.seekToSequenceTime(timeline.getCurrentSequenceTime(), false);
       } else if (curIdx !== -1) {
-        player.seek(segs[curIdx].end);
+        const cur = segs[curIdx];
+        player.seek(cur.end);
+        timeline.seekToSequenceTime(timeline.totalDuration, false);
       }
     } else if (e.key === 'j' || e.key === 'J') {
       e.preventDefault();

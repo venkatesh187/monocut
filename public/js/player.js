@@ -117,9 +117,9 @@ class VideoPlayer {
       this.updateTimecode();
     };
 
-    // Video timeupdate fallback
+    // Video timeupdate fallback (only active when RVFC/RAF loop is suspended)
     this.video.addEventListener('timeupdate', () => {
-      if (!this.playbackRafId) {
+      if (!this.playbackRafId && !this.playbackRvfcId) {
         this.updateTimecode();
         this.handleMotionPanUpdate();
         this.handlePlaybackSequence();
@@ -390,8 +390,15 @@ class VideoPlayer {
     this.playerContainer.addEventListener('mousedown', onMouseDown);
   }
 
-  setCropOffset(offset, updateSlider = true) {
+  setCropOffset(offset, updateSlider = true, saveToClip = true) {
     this.cropOffsetX = Math.max(0, Math.min(1, offset));
+
+    if (saveToClip && window.timeline && window.timeline.activeClipId) {
+      const seg = window.timeline.segments.find(s => s.id === window.timeline.activeClipId);
+      if (seg) {
+        seg.cropOffsetX = this.cropOffsetX;
+      }
+    }
 
     if (this.aspectRatio === '9:16') {
       const pct = Math.round(this.cropOffsetX * 100);
@@ -458,8 +465,15 @@ class VideoPlayer {
   // KEYFRAME PUNCH-IN & DYNAMIC ZOOM
   // =========================================================
 
-  setZoomScale(scale) {
+  setZoomScale(scale, saveToClip = true) {
     this.zoomScale = scale;
+
+    if (saveToClip && window.timeline && window.timeline.activeClipId) {
+      const seg = window.timeline.segments.find(s => s.id === window.timeline.activeClipId);
+      if (seg) {
+        seg.zoomScale = scale;
+      }
+    }
 
     document.querySelectorAll('.punch-btn[data-zoom]').forEach(btn => {
       btn.classList.toggle('active', parseFloat(btn.dataset.zoom) === scale);
@@ -471,6 +485,18 @@ class VideoPlayer {
         this.video.style.transformOrigin = 'center center';
       } else {
         this.video.style.transform = 'none';
+      }
+    }
+  }
+
+  syncActiveClipProperties() {
+    if (!window.timeline || !window.timeline.segments || window.timeline.segments.length === 0) return;
+    const seg = window.timeline.segments.find(s => s.id === window.timeline.activeClipId);
+    if (seg) {
+      const zoom = seg.zoomScale || 1.0;
+      this.setZoomScale(zoom, false);
+      if (seg.cropOffsetX !== undefined) {
+        this.setCropOffset(seg.cropOffsetX, true, false);
       }
     }
   }
@@ -679,112 +705,141 @@ class VideoPlayer {
   handlePlaybackSequence() {
     if (!this.videoLoaded || this.video.paused || this.video.seeking || this.isTransitioning) return;
 
-    if (window.timeline && window.timeline.segments && window.timeline.segments.length > 0) {
-      const segs = window.timeline.segments;
-      const curTime = this.video.currentTime;
+    const timeline = window.timeline;
+    if (!timeline || !timeline.segments || timeline.segments.length === 0) return;
 
-      // Identify current clip respecting activeClipId and currentSourceUri
-      let curIdx = -1;
-      if (window.timeline.activeClipId) {
-        const aIdx = segs.findIndex(s => s.id === window.timeline.activeClipId);
-        if (aIdx !== -1) {
-          const s = segs[aIdx];
-          const uriMatches = !this.currentSourceUri || !s.sourceUri || s.sourceUri === this.currentSourceUri;
-          if (uriMatches && curTime >= (s.start - 0.05) && curTime <= (s.end + 0.05)) {
-            curIdx = aIdx;
-          }
+    const segs = timeline.segments;
+    const curTime = this.video.currentTime;
+    const curUri = this.currentSourceUri;
+
+    // 1. Identify active clip matching current video currentTime and activeClipId
+    let curIdx = -1;
+    if (timeline.activeClipId) {
+      const aIdx = segs.findIndex(s => s.id === timeline.activeClipId);
+      if (aIdx !== -1) {
+        const s = segs[aIdx];
+        const uriMatches = !curUri || !s.sourceUri || s.sourceUri === curUri;
+        if (uriMatches && curTime >= (s.start - 0.08) && curTime <= (s.end + 0.08)) {
+          curIdx = aIdx;
         }
       }
-      if (curIdx === -1) {
-        curIdx = segs.findIndex(s => {
-          const uriMatches = !this.currentSourceUri || !s.sourceUri || s.sourceUri === this.currentSourceUri;
-          return uriMatches && curTime >= (s.start - 0.02) && curTime < s.end;
-        });
+    }
+    if (curIdx === -1) {
+      curIdx = segs.findIndex(s => {
+        const uriMatches = !curUri || !s.sourceUri || s.sourceUri === curUri;
+        return uriMatches && curTime >= (s.start - 0.04) && curTime < s.end;
+      });
+    }
+
+    const frameDuration = 1 / (this.fps || 60);
+    const lookahead = Math.max(0.016, frameDuration * (this.playbackRate || 1.0) * 1.25);
+
+    if (curIdx !== -1) {
+      const curSeg = segs[curIdx];
+
+      // Multi-clip pre-warming: pre-buffer next clip within 1.5 seconds of clip boundary
+      const timeRemainingInClip = curSeg.end - curTime;
+      if (timeRemainingInClip <= 1.5 && timeRemainingInClip > 0) {
+        const upcomingSeg = (curIdx < segs.length - 1) ? segs[curIdx + 1] : (this.isLooping ? segs[0] : null);
+        if (upcomingSeg) {
+          this.prewarmClip(upcomingSeg);
+        }
       }
 
-      // Frame-accurate lookahead to trigger jump smoothly before passing clip end
-      const frameDuration = 1 / (this.fps || 60);
-      const lookahead = Math.max(0.02, frameDuration * (this.playbackRate || 1.0) * 1.25);
+      if (curTime >= (curSeg.end - lookahead)) {
+        // Next clip in sequence available?
+        if (curIdx < segs.length - 1) {
+          const nextSeg = segs[curIdx + 1];
 
-      if (curIdx !== -1) {
-        const curSeg = segs[curIdx];
+          // CRITICAL OPTIMIZATION: Contiguous split clips from the SAME video!
+          // If the next clip starts where the current clip ends, playback is already smooth!
+          // NEVER seek! Simply advance activeClipId with zero decoder stall or frame breaking!
+          const sameSource = (!nextSeg.sourceUri || !curSeg.sourceUri || nextSeg.sourceUri === curSeg.sourceUri);
+          const isContiguous = sameSource && Math.abs(nextSeg.start - curSeg.end) <= 0.08;
 
-        // Gapless multi-clip pre-warming: pre-buffer next clip within 1.5 seconds of clip boundary
-        const timeRemainingInClip = curSeg.end - curTime;
-        if (timeRemainingInClip <= 1.5 && timeRemainingInClip > 0) {
-          const upcomingSeg = (curIdx < segs.length - 1) ? segs[curIdx + 1] : (this.isLooping ? segs[0] : null);
-          if (upcomingSeg) {
-            this.prewarmClip(upcomingSeg);
+          if (isContiguous) {
+            timeline.activeClipId = nextSeg.id;
+            timeline.highlightActive();
+            return;
           }
-        }
 
-        if (curTime >= curSeg.end - lookahead) {
-          // If there is a next clip in sequence, jump to it!
-          if (curIdx < segs.length - 1) {
-            const nextSeg = segs[curIdx + 1];
-            this.isTransitioning = true;
-            window.timeline.activeClipId = nextSeg.id;
-            window.timeline.highlightActive();
-
-            if (nextSeg.sourceUri && this.currentSourceUri !== nextSeg.sourceUri) {
-              this.switchSource(nextSeg.sourceUri, nextSeg.start, true);
-            } else {
-              this.seek(nextSeg.start);
-            }
-            setTimeout(() => { this.isTransitioning = false; }, 150);
-          } else {
-            // Reached the end of the last clip
-            if (this.isLooping) {
-              this.isTransitioning = true;
-              window.timeline.activeClipId = segs[0].id;
-              window.timeline.highlightActive();
-              if (segs[0].sourceUri && this.currentSourceUri !== segs[0].sourceUri) {
-                this.switchSource(segs[0].sourceUri, segs[0].start, true);
-              } else {
-                this.seek(segs[0].start);
-              }
-              setTimeout(() => { this.isTransitioning = false; }, 150);
-            } else {
-              this.pause();
-              this.seek(curSeg.end);
-            }
-          }
-        }
-      } else {
-        // If playhead lands in a gap between clips, jump to next kept clip
-        const nextUpcoming = segs.find(s => s.start > curTime);
-        if (nextUpcoming) {
+          // Non-contiguous cut or different video file: execute clean jump
           this.isTransitioning = true;
-          window.timeline.activeClipId = nextUpcoming.id;
-          window.timeline.highlightActive();
-          if (nextUpcoming.sourceUri && this.currentSourceUri !== nextUpcoming.sourceUri) {
-            this.switchSource(nextUpcoming.sourceUri, nextUpcoming.start, true);
+          timeline.activeClipId = nextSeg.id;
+          timeline.highlightActive();
+
+          if (!sameSource) {
+            this.switchSource(nextSeg.sourceUri, nextSeg.start, true);
           } else {
-            this.seek(nextUpcoming.start);
+            this.seek(nextSeg.start);
           }
-          setTimeout(() => { this.isTransitioning = false; }, 150);
+
+          const onTransitionEnd = () => {
+            this.isTransitioning = false;
+            this.video.removeEventListener('seeked', onTransitionEnd);
+          };
+          this.video.addEventListener('seeked', onTransitionEnd, { once: true });
+          setTimeout(onTransitionEnd, 350);
+
         } else {
-          // Reached beyond all segments
+          // Reached the end of the last clip in sequence
           if (this.isLooping) {
+            const firstSeg = segs[0];
             this.isTransitioning = true;
-            window.timeline.activeClipId = segs[0].id;
-            window.timeline.highlightActive();
-            if (segs[0].sourceUri && this.currentSourceUri !== segs[0].sourceUri) {
-              this.switchSource(segs[0].sourceUri, segs[0].start, true);
+            timeline.activeClipId = firstSeg.id;
+            timeline.highlightActive();
+
+            const sameSource = (!firstSeg.sourceUri || !curSeg.sourceUri || firstSeg.sourceUri === curSeg.sourceUri);
+            if (!sameSource) {
+              this.switchSource(firstSeg.sourceUri, firstSeg.start, true);
             } else {
-              this.seek(segs[0].start);
+              this.seek(firstSeg.start);
             }
-            setTimeout(() => { this.isTransitioning = false; }, 150);
+
+            const onTransitionEnd = () => {
+              this.isTransitioning = false;
+              this.video.removeEventListener('seeked', onTransitionEnd);
+            };
+            this.video.addEventListener('seeked', onTransitionEnd, { once: true });
+            setTimeout(onTransitionEnd, 350);
           } else {
             this.pause();
-            const lastSeg = segs[segs.length - 1];
-            this.seek(lastSeg.end);
+            this.seek(curSeg.end);
           }
         }
       }
-    } else if (this.isLooping && this.video.duration && this.video.currentTime >= this.video.duration - 0.08) {
-      this.seek(0);
-      this.video.play().catch(() => {});
+    } else {
+      // Playhead fell into a gap: safely advance to next sequential clip
+      let nextClip = null;
+      if (timeline.activeClipId) {
+        const aIdx = segs.findIndex(s => s.id === timeline.activeClipId);
+        if (aIdx !== -1 && aIdx < segs.length - 1) {
+          nextClip = segs[aIdx + 1];
+        }
+      }
+      if (!nextClip && segs.length > 0) {
+        nextClip = segs[0];
+      }
+
+      if (nextClip && !this.isTransitioning) {
+        this.isTransitioning = true;
+        timeline.activeClipId = nextClip.id;
+        timeline.highlightActive();
+
+        const sameSource = (!nextClip.sourceUri || !this.currentSourceUri || nextClip.sourceUri === this.currentSourceUri);
+        if (!sameSource) {
+          this.switchSource(nextClip.sourceUri, nextClip.start, true);
+        } else {
+          this.seek(nextClip.start);
+        }
+
+        const onTransitionEnd = () => {
+          this.isTransitioning = false;
+          this.video.removeEventListener('seeked', onTransitionEnd);
+        };
+        this.video.addEventListener('seeked', onTransitionEnd, { once: true });
+        setTimeout(onTransitionEnd, 350);
+      }
     }
   }
 
@@ -882,24 +937,12 @@ class VideoPlayer {
       this.audioCtx.resume();
     }
 
-    const segs = window.timeline?.segments || [];
-    if (segs.length > 0) {
-      const lastSeg = segs[segs.length - 1];
-      const curTime = this.video.currentTime;
-      // If at or past the end of the sequence (or in trailing area), rewind to start and play!
-      if (curTime >= lastSeg.end - 0.05) {
-        this.seek(segs[0].start);
-        if (window.timeline) {
-          window.timeline.activeClipId = segs[0].id;
-          window.timeline.highlightActive();
-        }
-      } else if (curTime < segs[0].start) {
-        // If before the first clip start, jump to first clip start
-        this.seek(segs[0].start);
-        if (window.timeline) {
-          window.timeline.activeClipId = segs[0].id;
-          window.timeline.highlightActive();
-        }
+    const timeline = window.timeline;
+    if (timeline && timeline.totalDuration > 0 && timeline.segments && timeline.segments.length > 0) {
+      const curSeq = timeline.getCurrentSequenceTime();
+      // If at or past the end of the entire sequence, rewind to start of sequence
+      if (curSeq >= (timeline.totalDuration - 0.05)) {
+        timeline.seekToSequenceTime(0, false);
       }
     } else if (this.video.duration && this.video.currentTime >= this.video.duration - 0.08) {
       this.seek(0);
@@ -1006,6 +1049,9 @@ class VideoPlayer {
     if (this.scrubSeekTimer) {
       clearTimeout(this.scrubSeekTimer);
       this.scrubSeekTimer = null;
+    }
+    if (!this.isSeeking && this.pendingSeekTime === null) {
+      return;
     }
     this.isSeeking = false;
     this.isTransitioning = false;

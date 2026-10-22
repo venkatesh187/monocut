@@ -999,36 +999,46 @@ async function runExportPipeline(jobId, options) {
   const targetFps = (aspectRatio === '9:16') ? 60 : (meta && meta.fps ? Math.round(meta.fps) : 60);
   const effectiveFps = targetFps > 0 ? targetFps : 60;
 
-  // Build Video Filter: Crop, Scale, Square Pixel SAR, CFR Normalization & Standard YUV420p
-  let videoFilter = '';
-  if (aspectRatio === '9:16') {
-    if (hasMotionPan) {
-      videoFilter = `crop=ih*9/16:ih:'(in_w-ih*9/16)*(${panStart}+(${panEnd}-${panStart})*t/${Math.max(1, totalCutDuration)})':0`;
+  // Build Video Filter Generator: Supports per-clip zoom, framing offset, and continuous motion pan
+  function buildVideoFilterForSegment(seg, idx = 0) {
+    const segZoom = (seg && seg.zoomScale && seg.zoomScale > 1.05) ? seg.zoomScale : zoomScale;
+    const hasSegZoom = segZoom > 1.05;
+    const segCropOffset = (seg && seg.cropOffsetX !== undefined) ? seg.cropOffsetX : cropOffsetX;
+    const chunkStartSeqTime = segments.slice(0, idx).reduce((sum, s) => sum + Math.max(0, s.end - s.start), 0);
+
+    let vf = '';
+    if (aspectRatio === '9:16') {
+      if (hasMotionPan) {
+        vf = `crop=ih*9/16:ih:'(in_w-ih*9/16)*(${panStart}+(${panEnd}-${panStart})*(${chunkStartSeqTime}+t)/${Math.max(1, totalCutDuration)})':0`;
+      } else {
+        const offset = (segCropOffset !== undefined) ? segCropOffset : panStart;
+        vf = `crop=ih*9/16:ih:(in_w-ih*9/16)*${offset}:0`;
+      }
+
+      if (hasSegZoom) {
+        const zw = Math.round(targetWidth * segZoom);
+        const zh = Math.round(targetHeight * segZoom);
+        vf += `,scale=${zw}:${zh}:flags=bicubic,crop=${targetWidth}:${targetHeight}:(iw-${targetWidth})/2:(ih-${targetHeight})/2`;
+      } else {
+        vf += `,scale=${targetWidth}:${targetHeight}:flags=bicubic`;
+      }
     } else {
-      const offset = (cropOffsetX !== undefined) ? cropOffsetX : panStart;
-      videoFilter = `crop=ih*9/16:ih:(in_w-ih*9/16)*${offset}:0`;
+      // 16:9
+      if (hasSegZoom) {
+        const zw = Math.round(targetWidth * segZoom);
+        const zh = Math.round(targetHeight * segZoom);
+        vf = `scale=${zw}:${zh}:flags=bicubic,crop=${targetWidth}:${targetHeight}:(iw-${targetWidth})/2:(ih-${targetHeight})/2`;
+      } else {
+        vf = `scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease:flags=bicubic,pad=${targetWidth}:${targetHeight}:(ow-iw)/2:(oh-ih)/2`;
+      }
     }
 
-    if (hasZoom) {
-      const zw = Math.round(targetWidth * zoomScale);
-      const zh = Math.round(targetHeight * zoomScale);
-      videoFilter += `,scale=${zw}:${zh}:flags=bicubic,crop=${targetWidth}:${targetHeight}:(iw-${targetWidth})/2:(ih-${targetHeight})/2`;
-    } else {
-      videoFilter += `,scale=${targetWidth}:${targetHeight}:flags=bicubic`;
-    }
-  } else {
-    // 16:9
-    if (hasZoom) {
-      const zw = Math.round(targetWidth * zoomScale);
-      const zh = Math.round(targetHeight * zoomScale);
-      videoFilter = `scale=${zw}:${zh}:flags=bicubic,crop=${targetWidth}:${targetHeight}:(iw-${targetWidth})/2:(ih-${targetHeight})/2`;
-    } else {
-      videoFilter = `scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease:flags=bicubic,pad=${targetWidth}:${targetHeight}:(ow-iw)/2:(oh-ih)/2`;
-    }
+    // VFR-to-CFR & Stream Normalization: lock SAR=1, exact target CFR, and YUV420p format
+    vf += `,setsar=1,fps=${effectiveFps},format=yuv420p`;
+    return vf;
   }
 
-  // VFR-to-CFR & Stream Normalization: lock SAR=1, exact target CFR, and YUV420p format
-  videoFilter += `,setsar=1,fps=${effectiveFps},format=yuv420p`;
+  const defaultVideoFilter = buildVideoFilterForSegment(segments[0], 0);
 
   // Audio Timestamp Alignment & Resampling Filter for native audio
   const audioFilter = 'aresample=48000:async=1:first_pts=0,aformat=sample_fmts=fltp:channel_layouts=stereo';
@@ -1128,7 +1138,7 @@ async function runExportPipeline(jobId, options) {
       args.push('-f', 'lavfi', '-t', String(segDur), '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000');
     }
 
-    if (videoFilter) args.push('-vf', videoFilter);
+    if (defaultVideoFilter) args.push('-vf', defaultVideoFilter);
     if (includeAudio && audioFilter && !audioCodecArgs.includes('copy')) args.push('-af', audioFilter);
     args.push(...videoCodecArgs);
     args.push(...audioCodecArgs);
@@ -1198,7 +1208,8 @@ async function runExportPipeline(jobId, options) {
             chunkArgs.push('-f', 'lavfi', '-t', String(segDur), '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000');
           }
 
-          if (videoFilter) chunkArgs.push('-vf', videoFilter);
+          const segFilter = buildVideoFilterForSegment(seg, i);
+          if (segFilter) chunkArgs.push('-vf', segFilter);
           if (includeAudio && audioFilter && !audioCodecArgs.includes('copy')) {
             chunkArgs.push('-af', audioFilter);
           }

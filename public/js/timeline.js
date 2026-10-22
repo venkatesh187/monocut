@@ -320,10 +320,16 @@ class Timeline {
     if (this.historyIdx < this.history.length - 1) {
       this.history = this.history.slice(0, this.historyIdx + 1);
     }
+    // High-performance snapshot: Avoid stringifying megabytes of base64 thumbnail arrays
+    const snapshotSegments = this.segments.map(s => ({ ...s }));
     this.history.push({
-      segments: JSON.parse(JSON.stringify(this.segments)),
+      segments: snapshotSegments,
       activeClipId: this.activeClipId
     });
+    // Cap history to 30 states to keep memory footprint light
+    if (this.history.length > 30) {
+      this.history.shift();
+    }
     this.historyIdx = this.history.length - 1;
     this.updateHistoryButtons();
   }
@@ -332,12 +338,24 @@ class Timeline {
     if (this.historyIdx > 0) {
       this.historyIdx--;
       const s = this.history[this.historyIdx];
-      this.segments = JSON.parse(JSON.stringify(s.segments));
+      this.segments = s.segments.map(seg => ({ ...seg }));
       this.activeClipId = s.activeClipId;
       this.selectedEditPoint = null;
       this.recalculateSequenceDuration();
       this.render();
       this.updateHistoryButtons();
+
+      if (this.activeClipId) {
+        const seg = this.segments.find(x => x.id === this.activeClipId);
+        if (seg) {
+          if (seg.sourceUri && this.player.currentSourceUri !== seg.sourceUri) {
+            this.player.switchSource(seg.sourceUri, seg.start, false);
+          } else {
+            this.player.seek(seg.start);
+          }
+        }
+      }
+      this.showTimelineNotice("Undo [Ctrl+Z]");
     }
   }
 
@@ -345,12 +363,24 @@ class Timeline {
     if (this.historyIdx < this.history.length - 1) {
       this.historyIdx++;
       const s = this.history[this.historyIdx];
-      this.segments = JSON.parse(JSON.stringify(s.segments));
+      this.segments = s.segments.map(seg => ({ ...seg }));
       this.activeClipId = s.activeClipId;
       this.selectedEditPoint = null;
       this.recalculateSequenceDuration();
       this.render();
       this.updateHistoryButtons();
+
+      if (this.activeClipId) {
+        const seg = this.segments.find(x => x.id === this.activeClipId);
+        if (seg) {
+          if (seg.sourceUri && this.player.currentSourceUri !== seg.sourceUri) {
+            this.player.switchSource(seg.sourceUri, seg.start, false);
+          } else {
+            this.player.seek(seg.start);
+          }
+        }
+      }
+      this.showTimelineNotice("Redo [Ctrl+Y]");
     }
   }
 
@@ -736,62 +766,51 @@ class Timeline {
   splitAtPlayhead() {
     if (this.totalDuration <= 0 || this.segments.length === 0) return;
 
-    // 1. Determine current sequence time on the timeline
-    let seqTime = this.getCurrentSequenceTime();
-
-    // Check if needle position on timeline indicates specific sequence location
-    if (this.timelinePlayhead && this.timelinePlayhead.style.left) {
-      const leftPx = parseFloat(this.timelinePlayhead.style.left);
-      const trackWidth = this.getTrackWidth();
-      if (!isNaN(leftPx) && trackWidth > 0) {
-        const needleSeqTime = Math.max(0, Math.min(this.totalDuration, ((leftPx - 20) / trackWidth) * this.totalDuration));
-        if (Math.abs(needleSeqTime - seqTime) > 0.05 || seqTime === 0) {
-          seqTime = needleSeqTime;
-        }
-      }
+    const wasPlaying = !this.player.video.paused;
+    if (wasPlaying) {
+      this.player.pause();
     }
 
-    // 2. Locate targeted clip and calculate cut point
+    const curSourceTime = this.player.video.currentTime;
+    const curUri = this.player.currentSourceUri;
+
     let targetIdx = -1;
     let offsetInClip = 0;
-    const curUri = this.player.currentSourceUri;
-    const curSourceTime = this.player.video.currentTime;
 
-    // Priority A: Check activeClipId first
+    // 1. Priority A: Match active clip if playhead is within its boundaries
     if (this.activeClipId) {
-      let clipAcc = 0;
-      for (let i = 0; i < this.segments.length; i++) {
-        const s = this.segments[i];
-        const dur = Math.max(0, s.end - s.start);
-        if (s.id === this.activeClipId) {
-          if (seqTime >= (clipAcc - 0.03) && seqTime <= (clipAcc + dur + 0.03)) {
-            targetIdx = i;
-            offsetInClip = Math.max(0, Math.min(dur, seqTime - clipAcc));
-            break;
-          }
-          const uriMatches = !curUri || !s.sourceUri || s.sourceUri === curUri;
-          if (uriMatches && curSourceTime >= (s.start - 0.03) && curSourceTime <= (s.end + 0.03)) {
-            targetIdx = i;
-            offsetInClip = Math.max(0, Math.min(dur, curSourceTime - s.start));
-            break;
-          }
+      const idx = this.segments.findIndex(s => s.id === this.activeClipId);
+      if (idx !== -1) {
+        const s = this.segments[idx];
+        const uriMatches = !curUri || !s.sourceUri || s.sourceUri === curUri;
+        if (uriMatches && curSourceTime >= (s.start - 0.04) && curSourceTime <= (s.end + 0.04)) {
+          targetIdx = idx;
+          offsetInClip = Math.max(0, Math.min(s.end - s.start, curSourceTime - s.start));
         }
-        clipAcc += dur;
       }
     }
 
-    // Priority B: Locate clip on sequence timeline by sequence timestamp
+    // 2. Priority B: Scan clips matching video's current file & time
     if (targetIdx === -1) {
+      for (let i = 0; i < this.segments.length; i++) {
+        const s = this.segments[i];
+        const uriMatches = !curUri || !s.sourceUri || s.sourceUri === curUri;
+        if (uriMatches && curSourceTime >= s.start && curSourceTime <= s.end) {
+          targetIdx = i;
+          offsetInClip = Math.max(0, Math.min(s.end - s.start, curSourceTime - s.start));
+          break;
+        }
+      }
+    }
+
+    // 3. Priority C: Fallback to sequence position
+    if (targetIdx === -1) {
+      const seqTime = this.getCurrentSequenceTime();
       let acc = 0;
       for (let i = 0; i < this.segments.length; i++) {
         const s = this.segments[i];
         const dur = Math.max(0, s.end - s.start);
-        const isLast = (i === this.segments.length - 1);
-        const inSeq = isLast
-          ? (seqTime >= acc - 0.03 && seqTime <= acc + dur + 0.05)
-          : (seqTime >= acc - 0.03 && seqTime < acc + dur);
-
-        if (inSeq) {
+        if (seqTime >= acc && (seqTime < acc + dur || i === this.segments.length - 1)) {
           targetIdx = i;
           offsetInClip = Math.max(0, Math.min(dur, seqTime - acc));
           break;
@@ -800,22 +819,9 @@ class Timeline {
       }
     }
 
-    // Priority C: Match by video currentTime and matching source container
-    if (targetIdx === -1) {
-      for (let i = 0; i < this.segments.length; i++) {
-        const s = this.segments[i];
-        const dur = Math.max(0, s.end - s.start);
-        const uriMatches = !curUri || !s.sourceUri || s.sourceUri === curUri;
-        if (uriMatches && curSourceTime >= s.start && curSourceTime <= s.end) {
-          targetIdx = i;
-          offsetInClip = Math.max(0, Math.min(dur, curSourceTime - s.start));
-          break;
-        }
-      }
-    }
-
     if (targetIdx === -1) {
       this.showTimelineNotice("Move playhead inside a clip to split [S]");
+      if (wasPlaying) this.player.play();
       return;
     }
 
@@ -826,34 +832,29 @@ class Timeline {
     // Reject cuts right at clip edges to prevent microscopic sliver clips
     if (offsetInClip <= minMargin || offsetInClip >= (clipDur - minMargin)) {
       this.showTimelineNotice("Playhead is at clip cut point. Move playhead inside clip to split [S]");
+      if (wasPlaying) this.player.play();
       return;
     }
 
-    const splitTime = seg.start + offsetInClip;
+    const splitTime = Math.round((seg.start + offsetInClip) * 1000) / 1000;
     const newIdA = seg.id;
     const newIdB = `clip_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
 
     const cleanBaseName = seg.name ? seg.name.replace(/ \(Part \d+\)$/, '') : `Clip ${targetIdx + 1}`;
     const segA = {
+      ...seg,
       id: newIdA,
       start: seg.start,
       end: splitTime,
-      name: `${cleanBaseName} (Part 1)`,
-      sourcePath: seg.sourcePath,
-      sourceUri: seg.sourceUri,
-      sourceDuration: seg.sourceDuration,
-      thumbnails: seg.thumbnails
+      name: `${cleanBaseName} (Part 1)`
     };
 
     const segB = {
+      ...seg,
       id: newIdB,
       start: splitTime,
       end: seg.end,
-      name: `${cleanBaseName} (Part 2)`,
-      sourcePath: seg.sourcePath,
-      sourceUri: seg.sourceUri,
-      sourceDuration: seg.sourceDuration,
-      thumbnails: seg.thumbnails
+      name: `${cleanBaseName} (Part 2)`
     };
 
     // Splice split clips into sequence
@@ -865,9 +866,13 @@ class Timeline {
     this.pushHistory();
     this.render();
 
-    // Re-seek video accurately and update playhead
-    this.seekToSequenceTime(seqTime, false);
+    // Lock playhead position directly on presentation time without issuing a jarring seek
+    this.onPlayerTimeUpdate(curSourceTime);
     this.showTimelineNotice("Split clip into two parts [S]");
+
+    if (wasPlaying) {
+      this.player.play();
+    }
   }
 
   showTimelineNotice(msg) {
@@ -933,9 +938,10 @@ class Timeline {
       if (Math.abs(newStart - seg.start) > 0.0001) {
         seg.start = newStart;
         this.recalculateSequenceDuration();
-        this.pushHistory();
         this.render();
         this.selectClipEnd(seg.id, 'start');
+        this.player.seek(newStart, true);
+        this.debounceNudgeHistory();
       }
     } else {
       const maxEnd = seg.sourceDuration || this.sourceDuration || 10;
@@ -943,11 +949,20 @@ class Timeline {
       if (Math.abs(newEnd - seg.end) > 0.0001) {
         seg.end = newEnd;
         this.recalculateSequenceDuration();
-        this.pushHistory();
         this.render();
         this.selectClipEnd(seg.id, 'end');
+        this.player.seek(newEnd, true);
+        this.debounceNudgeHistory();
       }
     }
+  }
+
+  debounceNudgeHistory() {
+    if (this._nudgeHistoryTimer) clearTimeout(this._nudgeHistoryTimer);
+    this._nudgeHistoryTimer = setTimeout(() => {
+      this._nudgeHistoryTimer = null;
+      this.pushHistory();
+    }, 400);
   }
 
   trimStartToPlayhead() {
@@ -1247,6 +1262,14 @@ class Timeline {
     return img;
   }
 
+  scheduleFilmstripRedraw() {
+    if (this._filmstripRafId) return;
+    this._filmstripRafId = requestAnimationFrame(() => {
+      this._filmstripRafId = null;
+      this.drawAllFilmstrips();
+    });
+  }
+
   drawAllFilmstrips() {
     if (!this.clipsSequencer || this.segments.length === 0) return;
     const totalTrackWidth = this.getTrackWidth();
@@ -1261,10 +1284,10 @@ class Timeline {
 
   drawClipFilmstrip(canvas, seg, clipDuration, totalTrackWidth) {
     if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    const cssWidth = Math.max(40, rect.width || (clipDuration / Math.max(0.001, this.totalDuration)) * totalTrackWidth);
-    const cssHeight = Math.max(30, rect.height || 60);
+    const trackWidth = totalTrackWidth || this.getTrackWidth();
+    const cssWidth = Math.max(40, (clipDuration / Math.max(0.001, this.totalDuration)) * trackWidth);
+    const cssHeight = 60;
 
     const targetW = Math.round(cssWidth * dpr);
     const targetH = Math.round(cssHeight * dpr);
@@ -1301,7 +1324,7 @@ class Timeline {
         const thumbUrl = clipThumbs[thumbIdx];
 
         const img = this.getCachedImage(thumbUrl, () => {
-          this.drawClipFilmstrip(canvas, seg, clipDuration, totalTrackWidth);
+          this.scheduleFilmstripRedraw();
         });
 
         const x = f * actualCellW;
@@ -1534,7 +1557,11 @@ class Timeline {
           }
 
           // Seek video smoothly
-          this.player.seek(seg.start, true);
+          if (seg.sourceUri && this.player.currentSourceUri !== seg.sourceUri) {
+            this.player.switchSource(seg.sourceUri, seg.start, false);
+          } else {
+            this.player.seek(seg.start, true);
+          }
         } else {
           // Cannot trim before (seg.start + 0.1) or past sourceDuration
           const minEnd = seg.start + 0.1;
@@ -1573,7 +1600,11 @@ class Timeline {
           }
 
           // Seek video smoothly
-          this.player.seek(seg.end, true);
+          if (seg.sourceUri && this.player.currentSourceUri !== seg.sourceUri) {
+            this.player.switchSource(seg.sourceUri, seg.end, false);
+          } else {
+            this.player.seek(seg.end, true);
+          }
         }
 
         // Calculate updated sequence time for this edit point
@@ -1699,12 +1730,17 @@ class Timeline {
         }
       });
 
-      // Clicking a card in the bottom tray jumps to the start of that clip
+      // Clicking a card in the bottom tray jumps to the start of that clip cleanly across files
       card.addEventListener('click', () => {
         this.activeClipId = seg.id;
         this.selectedEditPoint = null;
         this.highlightActive();
-        this.player.seek(seg.start);
+        if (seg.sourceUri && this.player.currentSourceUri !== seg.sourceUri) {
+          this.player.switchSource(seg.sourceUri, seg.start, false);
+        } else {
+          this.player.seek(seg.start);
+        }
+        this.seekToSequenceTime(this.getCurrentSequenceTime(), false);
       });
 
       this.segmentsCardsList.appendChild(card);
@@ -1729,6 +1765,9 @@ class Timeline {
         ((isStart && this.selectedEditPoint.type === 'start') || (!isStart && this.selectedEditPoint.type === 'end'));
       el.classList.toggle('selected', !!isSelected);
     });
+    if (this.player && typeof this.player.syncActiveClipProperties === 'function') {
+      this.player.syncActiveClipProperties();
+    }
   }
 
   updateStats() {
@@ -1771,7 +1810,9 @@ class Timeline {
       start: Math.round(s.start * 1000) / 1000,
       end: Math.round(s.end * 1000) / 1000,
       name: s.name,
-      muted: !!s.muted
+      muted: !!s.muted,
+      zoomScale: s.zoomScale || 1.0,
+      cropOffsetX: s.cropOffsetX !== undefined ? s.cropOffsetX : 0.5
     }));
   }
 }

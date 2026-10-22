@@ -316,6 +316,23 @@
         </div>
 
         <div class="tools-right">
+          <!-- Timeline Zoom (Time Scale / Detail Level) -->
+          <div class="timeline-zoom-control" id="timelineZoomControl" title="Timeline Zoom (Time Scale)">
+            <button class="action-btn icon-btn" id="btnZoomOutTimeline" title="Zoom Out Timeline (-)">
+              <i data-feather="minus"></i>
+            </button>
+            <input type="range" id="timelineZoomSlider" class="timeline-zoom-slider" min="1" max="10" step="0.25" value="1" title="Timeline Time Scale (Detail Level)">
+            <button class="action-btn icon-btn" id="btnZoomInTimeline" title="Zoom In Timeline (+)">
+              <i data-feather="plus"></i>
+            </button>
+            <button class="action-btn timeline-zoom-val-btn active" id="btnZoomFitTimeline" title="Fit Timeline to Window (Shift+Z)">
+              <span id="timelineZoomDisplay">1.0×</span>
+              <span class="zoom-fit-tag">Fit</span>
+            </button>
+          </div>
+
+          <div class="toolbar-divider"></div>
+
           <button class="action-btn icon-btn" id="btnUndoAction" title="Undo (Ctrl+Z)" disabled>
             <i data-feather="rotate-ccw"></i>
           </button>
@@ -333,53 +350,55 @@
         
         <!-- Track Area with Ruler -->
         <div class="timeline-scroller" id="timelineScroller">
-          <!-- Time Ruler -->
-          <div class="ruler-bar" id="rulerBar">
-            <canvas id="rulerCanvas" height="26"></canvas>
-          </div>
-
-          <!-- Interactive Track Container -->
-          <div class="track-container" id="trackContainer">
-            <!-- Floating Live Trim Indicator Tooltip -->
-            <div class="trim-indicator-tooltip" id="trimTooltip" style="display: none;">
-              <span class="trim-badge-type" id="trimBadgeType">TRIM IN</span>
-              <span class="trim-badge-time" id="trimBadgeTime">00:00:00.00</span>
-              <span class="trim-badge-delta" id="trimBadgeDelta">+0.00s</span>
+          <div class="timeline-track-content" id="timelineTrackContent">
+            <!-- Time Ruler -->
+            <div class="ruler-bar" id="rulerBar">
+              <canvas id="rulerCanvas" height="26"></canvas>
             </div>
 
-            <!-- Clips Sequencer Track -->
-            <div class="clips-sequencer" id="clipsSequencer">
-              <!-- Dynamically populated clips with video filmstrips -->
+            <!-- Interactive Track Container -->
+            <div class="track-container" id="trackContainer">
+              <!-- Floating Live Trim Indicator Tooltip -->
+              <div class="trim-indicator-tooltip" id="trimTooltip" style="display: none;">
+                <span class="trim-badge-type" id="trimBadgeType">TRIM IN</span>
+                <span class="trim-badge-time" id="trimBadgeTime">00:00:00.00</span>
+                <span class="trim-badge-delta" id="trimBadgeDelta">+0.00s</span>
+              </div>
+
+              <!-- Clips Sequencer Track -->
+              <div class="clips-sequencer" id="clipsSequencer">
+                <!-- Dynamically populated clips with video filmstrips -->
+              </div>
             </div>
-          </div>
 
-          <!-- Magnetic Snap Guide Line -->
-          <div class="timeline-snap-guide" id="timelineSnapGuide" style="display: none;"></div>
+            <!-- Magnetic Snap Guide Line -->
+            <div class="timeline-snap-guide" id="timelineSnapGuide" style="display: none;"></div>
 
-          <!-- Interactive Clip Drop Indicator & Destination Badge -->
-          <div class="timeline-drop-indicator" id="timelineDropIndicator" style="display: none;"></div>
-          <div class="reorder-floating-badge" id="reorderFloatingBadge" style="display: none;">
-            <i data-feather="move"></i>
-            <span id="reorderBadgeText">Drop to Reorder</span>
-          </div>
-
-          <!-- Industry-Standard Playhead Needle & Scrubber Head (Thin White Pin & Line + Live Frame Preview Badge) -->
-          <div class="timeline-playhead" id="timelinePlayhead">
-            <div class="playhead-preview-card" id="playheadThumbPreview">
-              <img id="playheadThumbImg" class="playhead-thumb-img" alt="Scrub Frame" style="display: none;">
-              <div class="playhead-badge" id="playheadLiveBadge">00:00:00.000</div>
+            <!-- Interactive Clip Drop Indicator & Destination Badge -->
+            <div class="timeline-drop-indicator" id="timelineDropIndicator" style="display: none;"></div>
+            <div class="reorder-floating-badge" id="reorderFloatingBadge" style="display: none;">
+              <i data-feather="move"></i>
+              <span id="reorderBadgeText">Drop to Reorder</span>
             </div>
-            <div class="playhead-pin" title="Drag Playhead"></div>
-            <div class="playhead-line"></div>
-          </div>
 
-          <!-- Real-time Hover Guide & Tooltip Preview -->
-          <div class="timeline-hover-guide" id="timelineHoverGuide" style="display: none;">
-            <div class="hover-tooltip-card" id="hoverTooltipCard">
-              <img id="hoverThumbImg" class="hover-thumb-img" src="" alt="preview" style="display: none;">
-              <span class="hover-timecode" id="hoverTimecode">00:00:00.000</span>
+            <!-- Industry-Standard Playhead Needle & Scrubber Head (Thin White Pin & Line + Live Frame Preview Badge) -->
+            <div class="timeline-playhead" id="timelinePlayhead">
+              <div class="playhead-preview-card" id="playheadThumbPreview">
+                <img id="playheadThumbImg" class="playhead-thumb-img" alt="Scrub Frame" style="display: none;">
+                <div class="playhead-badge" id="playheadLiveBadge">00:00:00.000</div>
+              </div>
+              <div class="playhead-pin" title="Drag Playhead"></div>
+              <div class="playhead-line"></div>
             </div>
-            <div class="hover-guide-line"></div>
+
+            <!-- Real-time Hover Guide & Tooltip Preview -->
+            <div class="timeline-hover-guide" id="timelineHoverGuide" style="display: none;">
+              <div class="hover-tooltip-card" id="hoverTooltipCard">
+                <img id="hoverThumbImg" class="hover-thumb-img" src="" alt="preview" style="display: none;">
+                <span class="hover-timecode" id="hoverTimecode">00:00:00.000</span>
+              </div>
+              <div class="hover-guide-line"></div>
+            </div>
           </div>
         </div>
 
@@ -616,6 +635,9 @@
             <div class="sc-row"><span>Trim Start to Playhead</span><kbd>[</kbd></div>
             <div class="sc-row"><span>Trim End to Playhead</span><kbd>]</kbd></div>
             <div class="sc-row"><span>Move Clip Left / Right</span><kbd>Alt + ←</kbd> / <kbd>Alt + →</kbd></div>
+            <div class="sc-row"><span>Timeline Zoom In / Out</span><kbd>+</kbd> / <kbd>-</kbd></div>
+            <div class="sc-row"><span>Fit Timeline to Window</span><kbd>Shift + Z</kbd></div>
+            <div class="sc-row"><span>Zoom Timeline (Wheel)</span><kbd>Alt + Scroll</kbd></div>
             <div class="sc-row"><span>Toggle Seamless Loop</span><kbd>Shift + O</kbd></div>
             <div class="sc-row"><span>Save Frame (Snapshot)</span><kbd>P</kbd></div>
             <div class="sc-row"><span>Toggle Magnetic Snapping</span><kbd>N</kbd></div>

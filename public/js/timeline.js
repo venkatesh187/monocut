@@ -56,6 +56,16 @@ class Timeline {
     this.reorderBadgeText = document.getElementById('reorderBadgeText');
     this.isReorderingClip = false;
 
+    // Timeline Zoom (Time Scale / Detail Level)
+    this.zoomLevel = 1.0;
+    this.timelineTrackContent = document.getElementById('timelineTrackContent');
+    this.timelineZoomControl = document.getElementById('timelineZoomControl');
+    this.timelineZoomSlider = document.getElementById('timelineZoomSlider');
+    this.timelineZoomDisplay = document.getElementById('timelineZoomDisplay');
+    this.btnZoomInTimeline = document.getElementById('btnZoomInTimeline');
+    this.btnZoomOutTimeline = document.getElementById('btnZoomOutTimeline');
+    this.btnZoomFitTimeline = document.getElementById('btnZoomFitTimeline');
+
     this.segmentsCardsList = document.getElementById('segmentsCardsList');
     this.summaryDurationText = document.getElementById('summaryDurationText');
     this.summaryClipsCount = document.getElementById('summaryClipsCount');
@@ -212,6 +222,42 @@ class Timeline {
       e.currentTarget.blur();
       this.redo();
     });
+
+    // Timeline Zoom Controls (Zoom In, Zoom Out, Fit, Time Scale Slider)
+    if (this.btnZoomInTimeline) {
+      this.btnZoomInTimeline.addEventListener('click', (e) => {
+        e.currentTarget.blur();
+        this.zoomIn();
+      });
+    }
+    if (this.btnZoomOutTimeline) {
+      this.btnZoomOutTimeline.addEventListener('click', (e) => {
+        e.currentTarget.blur();
+        this.zoomOut();
+      });
+    }
+    if (this.btnZoomFitTimeline) {
+      this.btnZoomFitTimeline.addEventListener('click', (e) => {
+        e.currentTarget.blur();
+        this.zoomFit();
+      });
+    }
+    if (this.timelineZoomSlider) {
+      this.timelineZoomSlider.addEventListener('input', (e) => {
+        this.setZoomLevel(parseFloat(e.target.value));
+      });
+    }
+
+    // Zoom via Alt+Wheel or Ctrl+Wheel over Timeline or Ruler
+    if (this.timelineScroller) {
+      this.timelineScroller.addEventListener('wheel', (e) => {
+        if (e.altKey || e.ctrlKey) {
+          e.preventDefault();
+          const zoomDelta = e.deltaY < 0 ? 0.35 : -0.35;
+          this.setZoomLevel(this.zoomLevel + zoomDelta);
+        }
+      }, { passive: false });
+    }
 
     window.addEventListener('resize', () => {
       this.render();
@@ -397,7 +443,12 @@ class Timeline {
   }
 
   getTrackWidth() {
-    return Math.max(200, this.clipsSequencer.clientWidth || (window.innerWidth - 40));
+    if (this.clipsSequencer && this.clipsSequencer.clientWidth > 0) {
+      return this.clipsSequencer.clientWidth;
+    }
+    const scrollerW = this.timelineScroller ? this.timelineScroller.clientWidth : (window.innerWidth - 40);
+    const baseW = Math.max(200, scrollerW - 40);
+    return Math.round(baseW * (this.zoomLevel || 1.0));
   }
 
   /**
@@ -464,6 +515,10 @@ class Timeline {
         const trackWidth = this.getTrackWidth();
         const leftPx = 20 + (pct * trackWidth);
         this.timelinePlayhead.style.left = `${leftPx}px`;
+
+        if (this.zoomLevel > 1.0 && !this.player.video.paused) {
+          this.ensurePlayheadVisible(leftPx);
+        }
       }
 
       this.player.timeCurrent.textContent = this.player.formatTimecode(seqTime);
@@ -496,7 +551,11 @@ class Timeline {
 
       const pct = Math.max(0, Math.min(1, closestSeqTime / this.totalDuration));
       const trackWidth = this.getTrackWidth();
-      this.timelinePlayhead.style.left = `${20 + (pct * trackWidth)}px`;
+      const leftPx = 20 + (pct * trackWidth);
+      this.timelinePlayhead.style.left = `${leftPx}px`;
+      if (this.zoomLevel > 1.0 && !this.player.video.paused) {
+        this.ensurePlayheadVisible(leftPx);
+      }
       const liveBadge = document.getElementById('playheadLiveBadge');
       if (liveBadge) {
         liveBadge.textContent = this.player.formatTimecode(closestSeqTime);
@@ -738,7 +797,8 @@ class Timeline {
   seekToScreenPos(e, isFast = false) {
     if (this.totalDuration <= 0 || this.segments.length === 0) return;
 
-    const rect = this.dragTrackRect || this.clipsSequencer.getBoundingClientRect();
+    // Use current bounding rect to handle dynamic horizontal scrolling smoothly
+    const rect = this.clipsSequencer.getBoundingClientRect();
     const trackWidth = Math.max(1, rect.width);
     const clickX = Math.max(0, Math.min(trackWidth, e.clientX - rect.left));
     const rawPct = Math.max(0, Math.min(1, clickX / trackWidth));
@@ -760,6 +820,16 @@ class Timeline {
         this.timelineSnapGuide.style.left = `${playheadPx}px`;
       } else {
         this.timelineSnapGuide.style.display = 'none';
+      }
+    }
+
+    // Edge panning when dragging playhead at the boundaries of the scroller
+    if (this.zoomLevel > 1.0 && this.isDraggingPlayhead && this.timelineScroller) {
+      const scrollerRect = this.timelineScroller.getBoundingClientRect();
+      if (e.clientX > scrollerRect.right - 40) {
+        this.timelineScroller.scrollLeft += 15;
+      } else if (e.clientX < scrollerRect.left + 40) {
+        this.timelineScroller.scrollLeft -= 15;
       }
     }
 
@@ -1064,11 +1134,120 @@ class Timeline {
   }
 
   // =========================================================
+  // TIMELINE ZOOM & TIME SCALE ENGINE (DETAIL LEVEL)
+  // =========================================================
+
+  updateZoomContainer() {
+    if (!this.timelineTrackContent) return;
+    const scrollerW = (this.timelineScroller ? this.timelineScroller.clientWidth : 0) || (window.innerWidth - 40);
+    const zoom = Math.max(1.0, Math.min(10.0, this.zoomLevel || 1.0));
+    if (zoom <= 1.01) {
+      this.timelineTrackContent.style.width = '100%';
+    } else {
+      const zoomedW = Math.round(scrollerW * zoom);
+      this.timelineTrackContent.style.width = `${zoomedW}px`;
+    }
+    this.updateZoomUI();
+  }
+
+  updateZoomUI() {
+    const isFit = (this.zoomLevel || 1.0) <= 1.01;
+    if (this.timelineZoomSlider) {
+      this.timelineZoomSlider.value = this.zoomLevel || 1.0;
+    }
+    if (this.timelineZoomDisplay) {
+      this.timelineZoomDisplay.textContent = isFit ? '1.0×' : `${this.zoomLevel.toFixed(1)}×`;
+    }
+    if (this.btnZoomFitTimeline) {
+      this.btnZoomFitTimeline.classList.toggle('active', isFit);
+      this.btnZoomFitTimeline.title = isFit ? "Timeline Fit to Screen (1.0×)" : `Reset to Fit (Shift+Z) - Currently ${this.zoomLevel.toFixed(1)}×`;
+    }
+    if (this.btnZoomOutTimeline) {
+      this.btnZoomOutTimeline.disabled = isFit;
+    }
+    if (this.btnZoomInTimeline) {
+      this.btnZoomInTimeline.disabled = (this.zoomLevel || 1.0) >= 10.0;
+    }
+  }
+
+  setZoomLevel(level, anchorSeqTime = null) {
+    const prevZoom = this.zoomLevel || 1.0;
+    const clamped = Math.max(1.0, Math.min(10.0, Math.round(level * 100) / 100));
+    const newZoom = clamped <= 1.02 ? 1.0 : clamped;
+
+    if (Math.abs(prevZoom - newZoom) < 0.01 && this._hasAppliedZoom) return;
+    this._hasAppliedZoom = true;
+
+    // Anchor time: preserve current playhead position or viewport center
+    const scrollerW = this.timelineScroller ? this.timelineScroller.clientWidth : window.innerWidth - 40;
+    const scrollLeft = this.timelineScroller ? this.timelineScroller.scrollLeft : 0;
+    const prevTrackW = this.getTrackWidth();
+
+    let targetSeq = anchorSeqTime;
+    if (targetSeq === null && this.totalDuration > 0 && prevTrackW > 0) {
+      const centerPx = scrollLeft + (scrollerW / 2) - 20;
+      targetSeq = Math.max(0, Math.min(this.totalDuration, (centerPx / prevTrackW) * this.totalDuration));
+    }
+
+    this.zoomLevel = newZoom;
+    this.updateZoomContainer();
+
+    // Re-render ruler and clips with new width
+    this.drawRuler();
+    this.renderClipsTrack();
+
+    // Re-position playhead
+    if (this.totalDuration > 0) {
+      this.onPlayerTimeUpdate(this.player.video.currentTime);
+    }
+
+    // Scroll to preserve anchor
+    if (targetSeq !== null && this.totalDuration > 0 && this.timelineScroller) {
+      const newTrackW = this.getTrackWidth();
+      const newCenterPx = 20 + ((targetSeq / this.totalDuration) * newTrackW);
+      this.timelineScroller.scrollLeft = Math.max(0, newCenterPx - (scrollerW / 2));
+    }
+  }
+
+  zoomIn() {
+    const cur = this.zoomLevel || 1.0;
+    const next = cur < 2 ? cur + 0.25 : (cur < 5 ? cur + 0.5 : cur + 1.0);
+    this.setZoomLevel(next);
+  }
+
+  zoomOut() {
+    const cur = this.zoomLevel || 1.0;
+    const prev = cur <= 2 ? cur - 0.25 : (cur <= 5 ? cur - 0.5 : cur - 1.0);
+    this.setZoomLevel(prev);
+  }
+
+  zoomFit() {
+    this.setZoomLevel(1.0);
+    if (this.timelineScroller) {
+      this.timelineScroller.scrollLeft = 0;
+    }
+    this.showTimelineNotice("Fit Timeline to Window [Shift+Z]");
+  }
+
+  ensurePlayheadVisible(leftPx) {
+    if (!this.timelineScroller) return;
+    const scrollLeft = this.timelineScroller.scrollLeft;
+    const viewWidth = this.timelineScroller.clientWidth;
+    const margin = 60;
+    if (leftPx > (scrollLeft + viewWidth - margin)) {
+      this.timelineScroller.scrollLeft = leftPx - viewWidth + margin;
+    } else if (leftPx < (scrollLeft + margin)) {
+      this.timelineScroller.scrollLeft = Math.max(0, leftPx - margin);
+    }
+  }
+
+  // =========================================================
   // RENDERING (100% MAGNETIC SEQUENCE TIMELINE)
   // =========================================================
 
   render() {
     this.recalculateSequenceDuration();
+    this.updateZoomContainer();
     this.drawRuler();
     this.renderClipsTrack();
     this.renderSegmentsCards();
@@ -1095,8 +1274,12 @@ class Timeline {
     const maxMajorTicks = Math.max(1, Math.floor(usableWidth / minPixelsBetweenLabels));
     const rawStep = this.totalDuration / maxMajorTicks;
 
-    // Standard intervals in seconds: 1s, 2s, 5s, 10s, 15s, 30s, 1m, 2m, 5m, 10m, 15m, 30m, 1h
+    const fps = this.player.fps || 60;
+    const fDur = 1 / fps;
+
+    // Standard intervals in seconds down to frame-level when zoomed in
     const NICE_STEPS = [
+      fDur, fDur * 2, fDur * 5, fDur * 10,
       0.25, 0.5, 1, 2, 5, 10, 15, 30,
       60, 120, 300, 600, 900, 1800, 3600
     ];
@@ -1112,7 +1295,7 @@ class Timeline {
       step = Math.ceil(rawStep / 3600) * 3600;
     }
 
-    const subStep = step >= 60 ? (step / 4) : (step / 2);
+    const subStep = step >= 60 ? (step / 4) : (step >= 1 ? (step / 2) : (step / 2));
 
     ctx.fillStyle = '#8a8a9e';
     ctx.font = '10px "JetBrains Mono", monospace';
@@ -1143,10 +1326,16 @@ class Timeline {
 
       const mins = Math.floor(t / 60);
       const secs = Math.floor(t % 60);
+      const frames = Math.min(fps - 1, Math.round(((t % 1) * fps)));
       let label;
       if (this.totalDuration >= 3600) {
         const hrs = Math.floor(t / 3600);
         label = `${String(hrs).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+      } else if (step < 0.2) {
+        label = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}:${String(frames).padStart(2, '0')}f`;
+      } else if (step < 1) {
+        const ms = Math.floor((t % 1) * 100);
+        label = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${String(ms).padStart(2, '0')}`;
       } else {
         label = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
       }
@@ -1746,6 +1935,16 @@ class Timeline {
         }
 
         currentTargetIndex = targetIndex;
+
+        // Edge auto-scrolling when dragging clip across zoomed timeline
+        if (this.zoomLevel > 1.0 && this.timelineScroller) {
+          const scrollerRect = this.timelineScroller.getBoundingClientRect();
+          if (ev.clientX > scrollerRect.right - 40) {
+            this.timelineScroller.scrollLeft += 15;
+          } else if (ev.clientX < scrollerRect.left + 40) {
+            this.timelineScroller.scrollLeft -= 15;
+          }
+        }
 
         // Sequence time at boundary
         let boundarySeqTime = 0;

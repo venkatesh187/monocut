@@ -231,6 +231,18 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (e.altKey && (e.key === 'ArrowRight' || e.key === 'Right')) {
       e.preventDefault();
       timeline.moveActiveClip(1);
+    } else if (e.key === '=' || e.key === '+') {
+      e.preventDefault();
+      timeline.zoomIn();
+    } else if ((e.key === '-' || e.key === '_') && !e.ctrlKey) {
+      e.preventDefault();
+      timeline.zoomOut();
+    } else if ((e.key === 'z' || e.key === 'Z') && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      timeline.zoomFit();
+    } else if (e.key === '\\' && !e.shiftKey && !e.ctrlKey) {
+      e.preventDefault();
+      timeline.zoomFit();
     } else if (e.key === ',' || e.key === '<' || e.key === 'ArrowLeft') {
       e.preventDefault();
       if (timeline.selectedEditPoint) {

@@ -1504,6 +1504,77 @@ body {
   transform: translateX(-50%);
 }
 
+/* Interactive Timeline Clip Reorder Drop Indicator */
+.timeline-drop-indicator {
+  position: absolute;
+  top: 26px;
+  bottom: 0;
+  width: 4px;
+  background: #00f0ff;
+  box-shadow: 0 0 14px #00f0ff, 0 0 28px rgba(0, 240, 255, 0.7);
+  pointer-events: none;
+  z-index: 96;
+  transform: translateX(-50%);
+  border-radius: 2px;
+}
+
+.timeline-drop-indicator::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 7px solid #00f0ff;
+  filter: drop-shadow(0 0 4px #00f0ff);
+}
+
+.timeline-drop-indicator::after {
+  content: "";
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 7px solid #00f0ff;
+  filter: drop-shadow(0 0 4px #00f0ff);
+}
+
+/* Floating Reorder Target Badge */
+.reorder-floating-badge {
+  position: absolute;
+  top: 32px;
+  transform: translateX(-50%);
+  background: rgba(14, 14, 22, 0.96);
+  backdrop-filter: blur(8px);
+  border: 1px solid #00f0ff;
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.9), 0 0 12px rgba(0, 240, 255, 0.4);
+  pointer-events: none;
+  z-index: 100;
+  white-space: nowrap;
+  font-size: 11px;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.reorder-floating-badge svg {
+  width: 13px;
+  height: 13px;
+  color: #00f0ff;
+}
+
 /* Hover Guide & Tooltip */
 .timeline-hover-guide {
   position: absolute;
@@ -1611,6 +1682,17 @@ body {
   border-bottom: 2.5px solid var(--accent-white);
   box-shadow: 0 0 20px rgba(255, 255, 255, 0.25);
   z-index: 10;
+}
+
+.timeline-clip-card.is-reordering {
+  opacity: 0.72;
+  transform: scaleY(0.97);
+  box-shadow: 0 0 20px rgba(0, 240, 255, 0.45), inset 0 0 12px rgba(0, 240, 255, 0.25) !important;
+  border-top: 2.5px solid #00f0ff !important;
+  border-bottom: 2.5px solid #00f0ff !important;
+  cursor: grabbing !important;
+  z-index: 35 !important;
+  transition: transform 0.08s ease, opacity 0.08s ease;
 }
 
 /* In-House Hardware-Accelerated Filmstrip Canvas */
@@ -1936,6 +2018,46 @@ body {
 
 .seg-remove-btn:hover {
   color: var(--accent-danger);
+}
+
+.seg-move-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-dark);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 3px;
+  border-radius: var(--radius-xs);
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.seg-move-btn:hover:not(:disabled) {
+  color: var(--accent-white);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.seg-move-btn:disabled {
+  opacity: 0.2;
+  cursor: not-allowed;
+}
+
+.seg-move-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.seg-item-card.dragging {
+  opacity: 0.45;
+}
+
+.seg-item-card.drag-over-left {
+  border-left: 2px solid #00f0ff !important;
+}
+
+.seg-item-card.drag-over-right {
+  border-right: 2px solid #00f0ff !important;
 }
 
 /* =========================================================

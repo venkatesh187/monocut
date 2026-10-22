@@ -50,6 +50,12 @@ class Timeline {
     this.timelineSnapGuide = document.getElementById('timelineSnapGuide');
     this.snappingEnabled = true;
 
+    // Interactive Clip Reorder Drop Indicator & Live Target Badge
+    this.timelineDropIndicator = document.getElementById('timelineDropIndicator');
+    this.reorderFloatingBadge = document.getElementById('reorderFloatingBadge');
+    this.reorderBadgeText = document.getElementById('reorderBadgeText');
+    this.isReorderingClip = false;
+
     this.segmentsCardsList = document.getElementById('segmentsCardsList');
     this.summaryDurationText = document.getElementById('summaryDurationText');
     this.summaryClipsCount = document.getElementById('summaryClipsCount');
@@ -82,6 +88,7 @@ class Timeline {
     const startScrub = (e) => {
       if (this.totalDuration <= 0 || this.segments.length === 0) return;
       if (e.target.classList.contains('trim-drag-handle') || e.target.closest('.trim-drag-handle')) return;
+      if (e.target.classList.contains('timeline-clip-card') || e.target.closest('.timeline-clip-card')) return;
 
       this.selectedEditPoint = null;
       this.highlightActive();
@@ -1218,15 +1225,8 @@ class Timeline {
       this.bindHandle(rightHandle, seg, 'end', clipEl);
       clipEl.appendChild(rightHandle);
 
-      // Clip Selection (Does NOT jump to start when clicked inside the timeline)
-      clipEl.addEventListener('click', (e) => {
-        if (!this.isTrimming) {
-          if (e.target.classList.contains('trim-drag-handle') || e.target.closest('.trim-drag-handle')) return;
-          this.activeClipId = seg.id;
-          this.selectedEditPoint = null;
-          this.highlightActive();
-        }
-      });
+      // Interactive Direct Timeline Clip Reordering & Selection
+      this.bindClipReorder(clipEl, seg, idx);
 
       this.clipsSequencer.appendChild(clipEl);
       accDuration += clipDuration;
@@ -1664,6 +1664,223 @@ class Timeline {
     });
   }
 
+  // =========================================================
+  // INTERACTIVE TIMELINE CLIP REORDERING ENGINE
+  // =========================================================
+
+  bindClipReorder(clipEl, seg, idx) {
+    clipEl.addEventListener('mousedown', (e) => {
+      // 1. Never interfere with trim handles
+      if (e.target.classList.contains('trim-drag-handle') || e.target.closest('.trim-drag-handle')) {
+        return;
+      }
+
+      // Only left mouse button
+      if (e.button !== 0) return;
+
+      // Stop propagation so startScrub on trackContainer doesn't run
+      e.stopPropagation();
+
+      const startX = e.clientX;
+      const startY = e.clientY;
+      let hasMovedPastThreshold = false;
+      let isDragging = false;
+      const fromIndex = this.segments.findIndex(s => s.id === seg.id);
+      if (fromIndex === -1) return;
+
+      const wasPlaying = !this.player.video.paused;
+      let currentTargetIndex = fromIndex;
+
+      const onMouseMove = (ev) => {
+        const deltaX = ev.clientX - startX;
+        const deltaY = ev.clientY - startY;
+
+        // 6px movement threshold distinguishes a fast click/seek from intentional drag
+        if (!hasMovedPastThreshold) {
+          if (Math.hypot(deltaX, deltaY) > 6) {
+            hasMovedPastThreshold = true;
+            isDragging = true;
+            this.isReorderingClip = true;
+
+            if (wasPlaying) {
+              this.player.pause();
+            }
+
+            clipEl.classList.add('is-reordering');
+            document.body.style.cursor = 'grabbing';
+            document.body.style.userSelect = 'none';
+
+            if (this.timelineHoverGuide) {
+              this.timelineHoverGuide.style.display = 'none';
+            }
+            if (this.timelineDropIndicator) {
+              this.timelineDropIndicator.style.display = 'block';
+            }
+            if (this.reorderFloatingBadge) {
+              this.reorderFloatingBadge.style.display = 'flex';
+            }
+          } else {
+            return;
+          }
+        }
+
+        // Calculate cursor position along the sequence
+        const currentTrackRect = this.clipsSequencer.getBoundingClientRect();
+        const currentTrackWidth = Math.max(1, currentTrackRect.width);
+        const cursorX = Math.max(0, Math.min(currentTrackWidth, ev.clientX - currentTrackRect.left));
+        const cursorPct = cursorX / currentTrackWidth;
+        const cursorSeqTime = cursorPct * this.totalDuration;
+
+        // Find which clip boundary the cursor is targeting
+        let targetIndex = this.segments.length;
+        let accDur = 0;
+        for (let i = 0; i < this.segments.length; i++) {
+          const s = this.segments[i];
+          const dur = Math.max(0, s.end - s.start);
+          const midTime = accDur + (dur / 2);
+          if (cursorSeqTime < midTime) {
+            targetIndex = i;
+            break;
+          }
+          accDur += dur;
+        }
+
+        currentTargetIndex = targetIndex;
+
+        // Sequence time at boundary
+        let boundarySeqTime = 0;
+        for (let k = 0; k < targetIndex; k++) {
+          boundarySeqTime += Math.max(0, this.segments[k].end - this.segments[k].start);
+        }
+
+        const boundaryPct = this.totalDuration > 0 ? (boundarySeqTime / this.totalDuration) : 0;
+        const indicatorPx = 20 + (boundaryPct * currentTrackWidth);
+
+        if (this.timelineDropIndicator) {
+          this.timelineDropIndicator.style.left = `${indicatorPx}px`;
+        }
+
+        if (this.reorderFloatingBadge) {
+          this.reorderFloatingBadge.style.left = `${indicatorPx}px`;
+          const numClips = this.segments.length;
+
+          if (targetIndex === fromIndex || targetIndex === fromIndex + 1) {
+            if (this.reorderBadgeText) {
+              this.reorderBadgeText.textContent = `Keep in position #${fromIndex + 1}`;
+            }
+          } else if (targetIndex === 0) {
+            if (this.reorderBadgeText) {
+              this.reorderBadgeText.textContent = `Move to Start (Position 1 of ${numClips})`;
+            }
+          } else if (targetIndex >= numClips) {
+            if (this.reorderBadgeText) {
+              this.reorderBadgeText.textContent = `Move to End (Position ${numClips} of ${numClips})`;
+            }
+          } else {
+            const destPos = targetIndex > fromIndex ? targetIndex : targetIndex + 1;
+            if (this.reorderBadgeText) {
+              this.reorderBadgeText.textContent = `Move to Position ${destPos} of ${numClips}`;
+            }
+          }
+        }
+      };
+
+      const cleanupReorder = () => {
+        this.isReorderingClip = false;
+        clipEl.classList.remove('is-reordering');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+
+        if (this.timelineDropIndicator) {
+          this.timelineDropIndicator.style.display = 'none';
+        }
+        if (this.reorderFloatingBadge) {
+          this.reorderFloatingBadge.style.display = 'none';
+        }
+      };
+
+      const onKeyDown = (eKey) => {
+        if (eKey.key === 'Escape' && isDragging) {
+          window.removeEventListener('mousemove', onMouseMove);
+          window.removeEventListener('mouseup', onMouseUp);
+          window.removeEventListener('keydown', onKeyDown);
+          cleanupReorder();
+          this.render();
+          this.showTimelineNotice("Rearrange cancelled [Esc]");
+        }
+      };
+
+      const onMouseUp = (ev) => {
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+        window.removeEventListener('keydown', onKeyDown);
+
+        if (isDragging) {
+          cleanupReorder();
+
+          if (currentTargetIndex !== fromIndex && currentTargetIndex !== fromIndex + 1) {
+            const [movedClip] = this.segments.splice(fromIndex, 1);
+            const finalIndex = currentTargetIndex > fromIndex ? currentTargetIndex - 1 : currentTargetIndex;
+            this.segments.splice(finalIndex, 0, movedClip);
+
+            this.activeClipId = movedClip.id;
+            this.recalculateSequenceDuration();
+            this.pushHistory();
+            this.render();
+
+            // Seek playhead to start of moved clip at its new sequence time
+            let newSeqTime = 0;
+            for (let m = 0; m < finalIndex; m++) {
+              newSeqTime += (this.segments[m].end - this.segments[m].start);
+            }
+            this.seekToSequenceTime(newSeqTime, false);
+            this.showTimelineNotice(`Moved "${movedClip.name || 'Clip'}" to position #${finalIndex + 1}`);
+          }
+        } else {
+          // Normal click without drag: select clip and seek playhead to clicked point
+          this.activeClipId = seg.id;
+          this.selectedEditPoint = null;
+          this.highlightActive();
+          this.seekToScreenPos(ev, false);
+        }
+      };
+
+      window.addEventListener('mousemove', onMouseMove, { passive: false });
+      window.addEventListener('mouseup', onMouseUp);
+      window.addEventListener('keydown', onKeyDown);
+    });
+  }
+
+  moveActiveClip(direction) {
+    if (!this.activeClipId || this.segments.length <= 1) return;
+    const curIdx = this.segments.findIndex(s => s.id === this.activeClipId);
+    if (curIdx === -1) return;
+    this.moveClipByIndex(curIdx, direction);
+  }
+
+  moveClipByIndex(index, direction) {
+    if (index < 0 || index >= this.segments.length) return;
+    const targetIdx = index + direction;
+    if (targetIdx < 0 || targetIdx >= this.segments.length) {
+      this.showTimelineNotice(direction < 0 ? "Clip is already at start of sequence" : "Clip is already at end of sequence");
+      return;
+    }
+
+    const [movedSeg] = this.segments.splice(index, 1);
+    this.segments.splice(targetIdx, 0, movedSeg);
+    this.activeClipId = movedSeg.id;
+    this.recalculateSequenceDuration();
+    this.pushHistory();
+    this.render();
+
+    let newSeqTime = 0;
+    for (let m = 0; m < targetIdx; m++) {
+      newSeqTime += (this.segments[m].end - this.segments[m].start);
+    }
+    this.seekToSequenceTime(newSeqTime, false);
+    this.showTimelineNotice(`Moved "${movedSeg.name || 'Clip'}" to position #${targetIdx + 1} [Alt+${direction < 0 ? '←' : '→'}]`);
+  }
+
   renderSegmentsCards() {
     this.segmentsCardsList.innerHTML = '';
 
@@ -1692,11 +1909,35 @@ class Timeline {
       const endTc = formatCardTc(seg.end);
 
       card.innerHTML = `
+        <button class="seg-move-btn seg-move-left" title="Move Left (Alt+←)" ${idx === 0 ? 'disabled' : ''}>
+          <i data-feather="chevron-left"></i>
+        </button>
         <span class="seg-number">#${idx + 1}</span>
         <span class="seg-range">${startTc} → ${endTc}</span>
         <span class="seg-length">${dur}s</span>
+        <button class="seg-move-btn seg-move-right" title="Move Right (Alt+→)" ${idx === this.segments.length - 1 ? 'disabled' : ''}>
+          <i data-feather="chevron-right"></i>
+        </button>
         <button class="seg-remove-btn" title="Delete Clip"><i data-feather="x"></i></button>
       `;
+
+      const btnLeft = card.querySelector('.seg-move-left');
+      if (btnLeft) {
+        btnLeft.addEventListener('click', (e) => {
+          e.stopPropagation();
+          btnLeft.blur();
+          this.moveClipByIndex(idx, -1);
+        });
+      }
+
+      const btnRight = card.querySelector('.seg-move-right');
+      if (btnRight) {
+        btnRight.addEventListener('click', (e) => {
+          e.stopPropagation();
+          btnRight.blur();
+          this.moveClipByIndex(idx, 1);
+        });
+      }
 
       card.querySelector('.seg-remove-btn').addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1711,22 +1952,48 @@ class Timeline {
       });
       card.addEventListener('dragend', () => {
         card.classList.remove('dragging');
+        document.querySelectorAll('.seg-item-card').forEach(c => c.classList.remove('drag-over-left', 'drag-over-right'));
       });
       card.addEventListener('dragover', (e) => {
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
+        const rect = card.getBoundingClientRect();
+        const midX = rect.left + (rect.width / 2);
+        if (e.clientX < midX) {
+          card.classList.add('drag-over-left');
+          card.classList.remove('drag-over-right');
+        } else {
+          card.classList.add('drag-over-right');
+          card.classList.remove('drag-over-left');
+        }
+      });
+      card.addEventListener('dragleave', () => {
+        card.classList.remove('drag-over-left', 'drag-over-right');
       });
       card.addEventListener('drop', (e) => {
         e.preventDefault();
+        card.classList.remove('drag-over-left', 'drag-over-right');
         const fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
-        const toIdx = idx;
-        if (!isNaN(fromIdx) && fromIdx !== toIdx && fromIdx >= 0 && fromIdx < this.segments.length) {
-          const [movedItem] = this.segments.splice(fromIdx, 1);
-          this.segments.splice(toIdx, 0, movedItem);
-          this.recalculateSequenceDuration();
-          this.pushHistory();
-          this.render();
-          this.player.seek(movedItem.start);
+        const rect = card.getBoundingClientRect();
+        const midX = rect.left + (rect.width / 2);
+        const toIdx = e.clientX < midX ? idx : idx + 1;
+        if (!isNaN(fromIdx) && fromIdx >= 0 && fromIdx < this.segments.length) {
+          if (toIdx !== fromIdx && toIdx !== fromIdx + 1) {
+            const [movedItem] = this.segments.splice(fromIdx, 1);
+            const finalIdx = toIdx > fromIdx ? toIdx - 1 : toIdx;
+            this.segments.splice(finalIdx, 0, movedItem);
+            this.activeClipId = movedItem.id;
+            this.recalculateSequenceDuration();
+            this.pushHistory();
+            this.render();
+
+            let newSeqTime = 0;
+            for (let m = 0; m < finalIdx; m++) {
+              newSeqTime += (this.segments[m].end - this.segments[m].start);
+            }
+            this.seekToSequenceTime(newSeqTime, false);
+            this.showTimelineNotice(`Moved "${movedItem.name || 'Clip'}" to position #${finalIdx + 1}`);
+          }
         }
       });
 

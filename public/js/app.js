@@ -225,6 +225,12 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if ((e.key === 'y' && (e.ctrlKey || e.metaKey)) || (e.key === 'z' && (e.ctrlKey || e.metaKey) && e.shiftKey)) {
       e.preventDefault();
       timeline.redo();
+    } else if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'Left')) {
+      e.preventDefault();
+      timeline.moveActiveClip(-1);
+    } else if (e.altKey && (e.key === 'ArrowRight' || e.key === 'Right')) {
+      e.preventDefault();
+      timeline.moveActiveClip(1);
     } else if (e.key === ',' || e.key === '<' || e.key === 'ArrowLeft') {
       e.preventDefault();
       if (timeline.selectedEditPoint) {

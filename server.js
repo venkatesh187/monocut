@@ -813,7 +813,7 @@ async function runExportPipeline(jobId, options) {
   const finalOutName = cleanCustom
     ? `${cleanCustom}_${timestamp}${outExt}`
     : `${baseName}_${aspectRatio === '9:16' ? 'shorts' : (mode === 'godspeed' ? 'cut' : 'export')}_${timestamp}${outExt}`;
-  const finalOutPath = path.join(EXPORT_DIR, finalOutName);
+  const finalOutPath = path.resolve(EXPORT_DIR, finalOutName);
 
   // Format compatibility check for stream copy
   const formatMatchesSource = (outputFormat === 'source') ||
@@ -837,7 +837,11 @@ async function runExportPipeline(jobId, options) {
       if (segments.length === 1) {
         job.stage = 'Executing ⚡ God Speed lossless stream cut (~0.2s)...';
         const seg = segments[0];
-        const segSrc = seg.sourcePath || sourcePath;
+        let segSrc = seg.sourcePath || sourcePath;
+        if (!fs.existsSync(segSrc)) {
+          const found = findFileOnSystem(path.basename(segSrc));
+          if (found) segSrc = found;
+        }
         const segDur = Math.max(0.05, seg.end - seg.start);
 
         const args = [
@@ -909,7 +913,7 @@ async function runExportPipeline(jobId, options) {
 
           if (job.cancelled) throw new Error('Export cancelled by user');
 
-          const concatContent = tempClips.map(p => `file '${p.replace(/\\/g, '/')}'`).join('\n');
+          const concatContent = tempClips.map(p => `file '${path.basename(p)}'`).join('\n');
           fs.writeFileSync(concatListFile, concatContent);
 
           job.stage = 'Joining clips losslessly at God Speed...';
@@ -917,7 +921,7 @@ async function runExportPipeline(jobId, options) {
             '-y',
             '-f', 'concat',
             '-safe', '0',
-            '-i', concatListFile.replace(/\\/g, '/'),
+            '-i', path.basename(concatListFile),
             '-c', 'copy'
           ];
           if (outExt === '.mp4' || outExt === '.mov') {
@@ -1268,14 +1272,14 @@ async function runExportPipeline(jobId, options) {
       job.stage = 'Joining all video clips...';
       job.progress = 88;
       const validClips = tempClips.filter(Boolean);
-      const concatContent = validClips.map(p => `file '${p.replace(/\\/g, '/')}'`).join('\n');
+      const concatContent = validClips.map(p => `file '${path.basename(p)}'`).join('\n');
       fs.writeFileSync(concatListFile, concatContent);
 
       const concatArgs = [
         '-y',
         '-f', 'concat',
         '-safe', '0',
-        '-i', concatListFile.replace(/\\/g, '/'),
+        '-i', path.basename(concatListFile),
         '-c', 'copy'
       ];
       if (outExt === '.mp4' || outExt === '.mov') {

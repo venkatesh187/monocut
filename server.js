@@ -1405,6 +1405,15 @@ function runFfmpegCommand(args, job, expectedDuration, cwd = process.cwd()) {
   });
 }
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`[MONOCUT] Running at http://localhost:${PORT}`);
+});
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.log(`[MONOCUT] Port ${PORT} is already running an active MonoCut instance.`);
+    process.exit(0);
+  } else {
+    console.error('[MONOCUT] Server error:', err);
+  }
 });

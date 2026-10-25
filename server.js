@@ -771,6 +771,24 @@ app.post('/api/export', async (req, res) => {
   }
 });
 
+// Chained Audio Tempo Filter generator (supporting any custom speed from 0.05x to 16.0x)
+function buildAudioTempoFilter(speed) {
+  let s = Number(speed) || 1.0;
+  const filters = [];
+  while (s > 2.0) {
+    filters.push('atempo=2.0');
+    s /= 2.0;
+  }
+  while (s < 0.5) {
+    filters.push('atempo=0.5');
+    s /= 0.5;
+  }
+  if (Math.abs(s - 1.0) > 0.001 || filters.length === 0) {
+    filters.push('atempo=' + s.toFixed(4));
+  }
+  return filters.join(',');
+}
+
 /**
  * Supercharged God Speed & Max Compute Export Engine
  */
@@ -830,14 +848,12 @@ async function runExportPipeline(jobId, options) {
                       !hasZoom &&
                       !hasMotionPan &&
                       !anyMuted &&
-                      !anySpeedChange &&
                       allSameExt &&
                       formatMatchesSource;
 
   if (canLossless) {
     try {
       if (segments.length === 1) {
-        job.stage = 'Executing ⚡ God Speed lossless stream cut (~0.2s)...';
         const seg = segments[0];
         let segSrc = seg.sourcePath || sourcePath;
         if (!fs.existsSync(segSrc)) {
@@ -845,21 +861,86 @@ async function runExportPipeline(jobId, options) {
           if (found) segSrc = found;
         }
         const segDur = Math.max(0.05, seg.end - seg.start);
+        const segSpeed = Number(seg.speed) || 1.0;
+        const hasSpeed = Math.abs(segSpeed - 1.0) > 0.01;
 
-        const args = [
-          '-y',
-          '-ss', String(seg.start),
-          '-t', String(segDur),
-          '-i', segSrc,
-          '-c', 'copy',
-          '-avoid_negative_ts', 'make_zero',
-          finalOutPath
-        ];
+        if (!hasSpeed) {
+          job.stage = 'Executing ⚡ God Speed lossless stream cut (~0.2s)...';
+          const args = [
+            '-y',
+            '-ss', String(seg.start),
+            '-t', String(segDur),
+            '-i', segSrc,
+            '-c', 'copy',
+            '-avoid_negative_ts', 'make_zero'
+          ];
+          if (outExt === '.mp4' || outExt === '.mov') {
+            args.push('-movflags', '+faststart');
+          }
+          args.push(finalOutPath);
 
-        await runFfmpegCommand(args, job, segDur);
+          await runFfmpegCommand(args, job, segDur);
+        } else {
+          job.stage = `Applying ⚡ God Speed ${segSpeed}x speed scaling (~0.4s)...`;
+          const segExt = (path.extname(segSrc) || srcExt).toLowerCase();
+          const rawSlicePath = path.join(TEMP_DIR, `raw_${jobId}_0${segExt}`);
+          job.tempFiles.add(rawSlicePath);
+
+          try {
+            // Step 1: Lossless slice
+            const cutArgs = [
+              '-y',
+              '-ss', String(seg.start),
+              '-t', String(segDur),
+              '-i', segSrc,
+              '-c', 'copy',
+              '-avoid_negative_ts', 'make_zero',
+              rawSlicePath
+            ];
+            await runFfmpegCommand(cutArgs, job, segDur);
+
+            // Step 2: Stream-copy retiming with -itsscale and audio tempo filter
+            let segHasAudio = true;
+            try {
+              const probe = await probeVideo(segSrc);
+              segHasAudio = probe.hasAudio;
+            } catch (e) {
+              segHasAudio = true;
+            }
+
+            const speedScale = (1.0 / segSpeed).toFixed(6);
+            const scaleArgs = [
+              '-y',
+              '-itsscale', speedScale,
+              '-i', rawSlicePath,
+              '-c:v', 'copy'
+            ];
+
+            if (segHasAudio) {
+              const tempoFilter = buildAudioTempoFilter(segSpeed);
+              scaleArgs.push(
+                '-af', `${tempoFilter},aresample=48000:async=1`,
+                ...(segExt === '.webm'
+                  ? ['-c:a', 'libopus', '-b:a', '256k']
+                  : ['-c:a', 'aac', '-b:a', '320k'])
+              );
+            }
+
+            if (outExt === '.mp4' || outExt === '.mov') {
+              scaleArgs.push('-movflags', '+faststart');
+            }
+            scaleArgs.push(finalOutPath);
+
+            const scaledDur = segDur / segSpeed;
+            await runFfmpegCommand(scaleArgs, job, scaledDur);
+          } finally {
+            safeUnlink(rawSlicePath);
+          }
+        }
       } else {
         job.stage = `Slicing ${segments.length} clips at ⚡ God Speed...`;
         const tempClips = [];
+        const rawSlicesToClean = [];
         const concatListFile = path.join(TEMP_DIR, `concat_${jobId}.txt`);
         job.tempFiles.add(concatListFile);
 
@@ -875,19 +956,11 @@ async function runExportPipeline(jobId, options) {
             }
             const segDur = Math.max(0.05, seg.end - seg.start);
             const segExt = (path.extname(segSrc) || srcExt).toLowerCase();
+            const segSpeed = Number(seg.speed) || 1.0;
+            const hasSpeed = Math.abs(segSpeed - 1.0) > 0.01;
             const clipPath = path.join(TEMP_DIR, `clip_${jobId}_${i}${segExt}`);
             tempClips.push(clipPath);
             job.tempFiles.add(clipPath);
-
-            const cutArgs = [
-              '-y',
-              '-ss', String(seg.start),
-              '-t', String(segDur),
-              '-i', segSrc,
-              '-c', 'copy',
-              '-avoid_negative_ts', 'make_zero',
-              clipPath
-            ];
 
             const segBasePct = Math.round((i / segments.length) * 88);
             const segSpanPct = Math.round(88 / segments.length);
@@ -908,9 +981,70 @@ async function runExportPipeline(jobId, options) {
               set currentProcess(p) { job.currentProcess = p; }
             };
 
-            job.stage = `Cutting clip ${i + 1} of ${segments.length} (⚡ God Speed)...`;
-            job.progress = segBasePct;
-            await runFfmpegCommand(cutArgs, subJob, segDur);
+            if (!hasSpeed) {
+              job.stage = `Cutting clip ${i + 1} of ${segments.length} (⚡ God Speed)...`;
+              job.progress = segBasePct;
+              const cutArgs = [
+                '-y',
+                '-ss', String(seg.start),
+                '-t', String(segDur),
+                '-i', segSrc,
+                '-c', 'copy',
+                '-avoid_negative_ts', 'make_zero',
+                clipPath
+              ];
+              await runFfmpegCommand(cutArgs, subJob, segDur);
+            } else {
+              job.stage = `Cutting & scaling clip ${i + 1} of ${segments.length} (${segSpeed}x)...`;
+              job.progress = segBasePct;
+
+              // Step 1: Lossless slice
+              const rawSlicePath = path.join(TEMP_DIR, `raw_${jobId}_${i}${segExt}`);
+              job.tempFiles.add(rawSlicePath);
+              rawSlicesToClean.push(rawSlicePath);
+
+              const cutArgs = [
+                '-y',
+                '-ss', String(seg.start),
+                '-t', String(segDur),
+                '-i', segSrc,
+                '-c', 'copy',
+                '-avoid_negative_ts', 'make_zero',
+                rawSlicePath
+              ];
+              await runFfmpegCommand(cutArgs, subJob, segDur);
+
+              // Step 2: Lossless timestamp scale + audio tempo re-encode
+              let segHasAudio = true;
+              try {
+                const probe = await probeVideo(segSrc);
+                segHasAudio = probe.hasAudio;
+              } catch (e) {
+                segHasAudio = true;
+              }
+
+              const speedScale = (1.0 / segSpeed).toFixed(6);
+              const scaleArgs = [
+                '-y',
+                '-itsscale', speedScale,
+                '-i', rawSlicePath,
+                '-c:v', 'copy'
+              ];
+
+              if (segHasAudio) {
+                const tempoFilter = buildAudioTempoFilter(segSpeed);
+                scaleArgs.push(
+                  '-af', `${tempoFilter},aresample=48000:async=1`,
+                  ...(segExt === '.webm'
+                    ? ['-c:a', 'libopus', '-b:a', '256k']
+                    : ['-c:a', 'aac', '-b:a', '320k'])
+                );
+              }
+
+              scaleArgs.push(clipPath);
+              const scaledDur = segDur / segSpeed;
+              await runFfmpegCommand(scaleArgs, subJob, scaledDur);
+            }
           }
 
           if (job.cancelled) throw new Error('Export cancelled by user');
@@ -952,6 +1086,7 @@ async function runExportPipeline(jobId, options) {
 
         } finally {
           tempClips.forEach(p => safeUnlink(p));
+          rawSlicesToClean.forEach(p => safeUnlink(p));
           safeUnlink(concatListFile);
         }
       }
@@ -1056,24 +1191,6 @@ async function runExportPipeline(jobId, options) {
   }
 
   const defaultVideoFilter = buildVideoFilterForSegment(segments[0], 0);
-
-  // Chained Audio Tempo Filter generator (supporting any custom speed from 0.05x to 16.0x)
-  function buildAudioTempoFilter(speed) {
-    let s = speed;
-    const filters = [];
-    while (s > 2.0) {
-      filters.push('atempo=2.0');
-      s /= 2.0;
-    }
-    while (s < 0.5) {
-      filters.push('atempo=0.5');
-      s /= 0.5;
-    }
-    if (Math.abs(s - 1.0) > 0.001 || filters.length === 0) {
-      filters.push('atempo=' + s.toFixed(4));
-    }
-    return filters.join(',');
-  }
 
   function buildAudioFilterForSegment(seg) {
     const baseAudioFilter = 'aresample=48000:async=1:first_pts=0,aformat=sample_fmts=fltp:channel_layouts=stereo';

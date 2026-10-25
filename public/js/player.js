@@ -41,6 +41,14 @@ class VideoPlayer {
     // State (Defaults to 16:9 Landscape for high-performance widescreen editing)
     this.fps = 59.94;
     this.aspectRatio = '16:9';
+    this.framingMode = 'blur'; // 'blur' (full horizontal in middle + blurred bg) | 'crop' (9:16 vertical fill)
+    this.blurredBgCanvas = document.getElementById('blurredBgCanvas');
+    this.btnFramingBlur = document.getElementById('btnFramingBlur');
+    this.btnFramingCrop = document.getElementById('btnFramingCrop');
+    this.cropPanSection = document.getElementById('cropPanSection');
+    this.cropDivider = document.getElementById('cropDivider');
+    this.motionPanSection = document.getElementById('motionPanSection');
+    this.motionDivider = document.getElementById('motionDivider');
     this.playbackRate = 1.0;
     this.cropOffsetX = 0.5; // 0.0 to 1.0 (0.5 = Center)
     this.motionPanMode = 'static'; // 'static' | 'pan-lr' | 'pan-rl'
@@ -87,6 +95,7 @@ class VideoPlayer {
           this.updateTimecode();
           this.handleMotionPanUpdate();
           this.handlePlaybackSequence();
+          this.drawBlurredBackground();
           if ('requestVideoFrameCallback' in this.video) {
             this.playbackRvfcId = this.video.requestVideoFrameCallback(tick);
           } else {
@@ -123,6 +132,7 @@ class VideoPlayer {
         this.updateTimecode();
         this.handleMotionPanUpdate();
         this.handlePlaybackSequence();
+        this.drawBlurredBackground();
       }
     });
 
@@ -131,6 +141,7 @@ class VideoPlayer {
       this.updateTimecode();
       this.setAspectRatio(this.aspectRatio);
       this.setCropOffset(this.cropOffsetX);
+      this.drawBlurredBackground();
     });
 
     this.video.addEventListener('play', () => {
@@ -327,6 +338,14 @@ class VideoPlayer {
       this.btnToggleSafeZone.addEventListener('click', () => this.toggleSafeZone());
     }
 
+    // 9:16 Layout Mode Buttons (Blurred Fit vs Fill & Crop)
+    if (this.btnFramingBlur) {
+      this.btnFramingBlur.addEventListener('click', () => this.setFramingMode('blur'));
+    }
+    if (this.btnFramingCrop) {
+      this.btnFramingCrop.addEventListener('click', () => this.setFramingMode('crop'));
+    }
+
     // Direct Drag-to-Pan on Video Viewport
     this.setupDirectViewportPan();
   }
@@ -350,7 +369,7 @@ class VideoPlayer {
       hasMoved = false;
       startOffset = this.cropOffsetX;
 
-      if (this.aspectRatio === '9:16') {
+      if (this.aspectRatio === '9:16' && this.framingMode === 'crop') {
         this.isDraggingCrop = true;
         this.setMotionPanMode('static');
       }
@@ -419,8 +438,7 @@ class VideoPlayer {
 
     if (ratio === '9:16') {
       if (this.shortsControlBar) this.shortsControlBar.style.display = 'flex';
-      this.video.style.objectFit = 'cover';
-      this.setCropOffset(this.cropOffsetX);
+      this.setFramingMode(this.framingMode || 'blur');
       if (this.isSafeZoneVisible && this.safeZoneOverlayYT) {
         this.safeZoneOverlayYT.style.display = 'flex';
       }
@@ -429,6 +447,8 @@ class VideoPlayer {
       }
     } else {
       if (this.shortsControlBar) this.shortsControlBar.style.display = 'none';
+      if (this.blurredBgCanvas) this.blurredBgCanvas.style.display = 'none';
+      this.playerContainer.removeAttribute('data-framing');
       this.video.style.objectFit = 'contain';
       this.video.style.objectPosition = 'center center';
       if (this.safeZoneOverlayYT) this.safeZoneOverlayYT.style.display = 'none';
@@ -444,6 +464,60 @@ class VideoPlayer {
       window.timeline.updateStats();
     }
     feather.replace();
+  }
+
+  setFramingMode(mode = 'blur') {
+    this.framingMode = mode;
+    this.playerContainer.dataset.framing = mode;
+
+    if (this.btnFramingBlur) this.btnFramingBlur.classList.toggle('active', mode === 'blur');
+    if (this.btnFramingCrop) this.btnFramingCrop.classList.toggle('active', mode === 'crop');
+
+    const isCrop = (mode === 'crop');
+    if (this.cropPanSection) this.cropPanSection.style.display = isCrop ? 'flex' : 'none';
+    if (this.cropDivider) this.cropDivider.style.display = isCrop ? 'block' : 'none';
+    if (this.motionPanSection) this.motionPanSection.style.display = isCrop ? 'flex' : 'none';
+    if (this.motionDivider) this.motionDivider.style.display = isCrop ? 'block' : 'none';
+
+    if (mode === 'blur') {
+      this.video.style.objectFit = 'contain';
+      this.video.style.objectPosition = 'center center';
+      this.drawBlurredBackground();
+    } else {
+      if (this.blurredBgCanvas) this.blurredBgCanvas.style.display = 'none';
+      this.video.style.objectFit = 'cover';
+      this.setCropOffset(this.cropOffsetX);
+    }
+
+    if (window.exportManager && window.exportManager.syncFramingMode) {
+      window.exportManager.syncFramingMode(mode);
+    }
+  }
+
+  drawBlurredBackground() {
+    if (this.aspectRatio !== '9:16' || this.framingMode !== 'blur' || !this.videoLoaded) {
+      if (this.blurredBgCanvas) this.blurredBgCanvas.style.display = 'none';
+      return;
+    }
+    if (!this.blurredBgCanvas || !this.video) return;
+    this.blurredBgCanvas.style.display = 'block';
+
+    const ctx = this.blurredBgCanvas.getContext('2d');
+    if (!ctx) return;
+    if (this.blurredBgCanvas.width !== 180) {
+      this.blurredBgCanvas.width = 180;
+      this.blurredBgCanvas.height = 320;
+    }
+    try {
+      const vw = this.video.videoWidth || 1920;
+      const vh = this.video.videoHeight || 1080;
+      const scale = Math.max(180 / vw, 320 / vh);
+      const sw = 180 / scale;
+      const sh = 320 / scale;
+      const sx = (vw - sw) / 2;
+      const sy = (vh - sh) / 2;
+      ctx.drawImage(this.video, sx, sy, sw, sh, 0, 0, 180, 320);
+    } catch (e) {}
   }
 
   toggleSafeZone() {
@@ -1079,6 +1153,7 @@ class VideoPlayer {
     this.isSeeking = false;
     this.isTransitioning = false;
     this.updateTimecode();
+    this.drawBlurredBackground();
 
     // Immediately dispatch newest queued scrub target the instant seek finishes
     if (this.pendingSeekTime !== null) {

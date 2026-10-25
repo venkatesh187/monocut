@@ -80,7 +80,23 @@
       <!-- DEDICATED SHORTS CONTROL SUB-BAR (Placed cleanly above preview, never blocking video) -->
       <div class="shorts-control-bar" id="shortsControlBar" style="display: none;">
         <div class="scb-section">
-          <span class="scb-label"><i data-feather="crosshair"></i> Framing:</span>
+          <span class="scb-label"><i data-feather="layout"></i> Layout:</span>
+          <div class="preset-group">
+            <button class="preset-pill active" id="btnFramingBlur" data-framing="blur" title="Full horizontal video centered in 9:16 with smooth blurred background (keeps everything visible)">
+              <i data-feather="maximize-2"></i>
+              <span>Blurred Fit (Full Video)</span>
+            </button>
+            <button class="preset-pill" id="btnFramingCrop" data-framing="crop" title="Crop & fill 9:16 vertical frame">
+              <i data-feather="crop"></i>
+              <span>Fill & Crop</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="scb-divider" id="cropDivider" style="display: none;"></div>
+
+        <div class="scb-section" id="cropPanSection" style="display: none;">
+          <span class="scb-label"><i data-feather="crosshair"></i> Pan Framing:</span>
           <div class="preset-group">
             <button class="preset-pill" data-preset="0.0">Left</button>
             <button class="preset-pill active" data-preset="0.5">Center</button>
@@ -93,9 +109,9 @@
           </div>
         </div>
 
-        <div class="scb-divider"></div>
+        <div class="scb-divider" id="motionDivider" style="display: none;"></div>
 
-        <div class="scb-section">
+        <div class="scb-section" id="motionPanSection" style="display: none;">
           <span class="scb-label"><i data-feather="activity"></i> Auto-Pan:</span>
           <div class="motion-pan-group">
             <button class="motion-btn active" data-motion="static">Static</button>
@@ -119,8 +135,11 @@
       <section class="preview-section" id="previewSection">
         
         <!-- Center Player Box (Full 16:9 Landscape Canvas by default) -->
-        <div class="player-container" id="playerContainer" data-aspect="16:9">
+        <div class="player-container" id="playerContainer" data-aspect="16:9" data-framing="blur">
           
+          <!-- Blurred Background Canvas for Realtime 9:16 Preview -->
+          <canvas id="blurredBgCanvas" class="blurred-bg-canvas" style="display: none;"></canvas>
+
           <!-- HTML5 Hardware-Accelerated Video -->
           <video id="mainVideo" playsinline preload="auto" crossorigin="anonymous"></video>
 
@@ -541,7 +560,7 @@
                     <span class="mode-name">📱 YouTube Shorts & Reels</span>
                     <span class="speed-tag">9:16 • 60 FPS</span>
                   </div>
-                  <p class="mode-desc">1080×1920 vertical framing with smooth 60 FPS playback.</p>
+                  <p class="mode-desc">4K Portrait (2160×3840) or 1080p vertical framing with blurred background.</p>
                 </div>
               </label>
 
@@ -556,16 +575,16 @@
               <span id="lockedNoteText">Resolution & format locked to source (4K WebM) for instant stream copy.</span>
             </div>
 
-            <!-- Advanced Dropdowns (revealed smoothly for Universal MP4) -->
+            <!-- Advanced Dropdowns (revealed smoothly for Universal MP4 & Shorts) -->
             <div class="form-grid-2" id="advancedDropdownsGrid" style="display: none;">
               <!-- Resolution -->
               <div class="form-item">
                 <label class="item-label">Resolution</label>
                 <select id="exportResolutionSelect" class="styled-select">
-                  <option value="source" selected>Source Match (Native 4K / 1080p)</option>
-                  <option value="1080p">1080p Full HD (1920×1080)</option>
-                  <option value="4k">4K Ultra HD (3840×2160)</option>
-                  <option value="720p">720p HD (1280×720)</option>
+                  <option value="4k" selected>4K Portrait (2160×3840 @ 60 FPS)</option>
+                  <option value="1080p">1080p Full HD (1080×1920 @ 60 FPS)</option>
+                  <option value="source">Source Match (Native 4K / 1080p)</option>
+                  <option value="720p">720p HD (720×1280 @ 60 FPS)</option>
                 </select>
               </div>
 
@@ -578,6 +597,15 @@
                   <option value="source">Match Source Container</option>
                 </select>
               </div>
+            </div>
+
+            <!-- Framing Style for 9:16 (Shown when 9:16 is active) -->
+            <div class="form-item" id="exportFramingFormItem" style="display: none; margin-bottom: 14px;">
+              <label class="item-label">Vertical Framing Style</label>
+              <select id="exportFramingSelect" class="styled-select">
+                <option value="blur" selected>Blurred Background (Full horizontal video visible in middle)</option>
+                <option value="crop">Fill & Crop (Cropped 9:16 vertical view)</option>
+              </select>
             </div>
 
             <!-- Filename Input with Inline Suffix Badge -->

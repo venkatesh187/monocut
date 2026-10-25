@@ -39,6 +39,8 @@ class ExportManager {
     this.lockedSettingsNote = document.getElementById('lockedSettingsNote');
     this.lockedNoteText = document.getElementById('lockedNoteText');
     this.advancedDropdownsGrid = document.getElementById('advancedDropdownsGrid');
+    this.exportFramingFormItem = document.getElementById('exportFramingFormItem');
+    this.exportFramingSelect = document.getElementById('exportFramingSelect');
     this.exportResolutionSelect = document.getElementById('exportResolutionSelect');
     this.exportFormatSelect = document.getElementById('exportFormatSelect');
     this.exportCustomFileName = document.getElementById('exportCustomFileName');
@@ -164,6 +166,7 @@ class ExportManager {
     // Progressive Disclosure for Output Controls
     if (selectedMode === 'godspeed') {
       if (this.advancedDropdownsGrid) this.advancedDropdownsGrid.style.display = 'none';
+      if (this.exportFramingFormItem) this.exportFramingFormItem.style.display = 'none';
       if (this.lockedSettingsNote) this.lockedSettingsNote.style.display = 'flex';
       if (this.lockedNoteText) {
         const sourceLabel = isWebm ? '4K WebM' : '4K MP4';
@@ -174,18 +177,30 @@ class ExportManager {
       if (this.exportExtBadge) this.exportExtBadge.textContent = isWebm ? '.webm' : '.mp4';
 
     } else if (selectedMode === 'shorts-60fps') {
-      if (this.advancedDropdownsGrid) this.advancedDropdownsGrid.style.display = 'none';
+      if (this.advancedDropdownsGrid) this.advancedDropdownsGrid.style.display = 'grid';
+      if (this.exportFramingFormItem) this.exportFramingFormItem.style.display = 'block';
       if (this.lockedSettingsNote) this.lockedSettingsNote.style.display = 'flex';
+      const is4kSource = this.meta && (this.meta.width >= 3800 || this.meta.height >= 2000);
       if (this.lockedNoteText) {
-        this.lockedNoteText.textContent = 'Resolution locked to 1080×1920 (9:16) and format to MP4 (H.264).';
+        this.lockedNoteText.textContent = is4kSource
+          ? '4K portrait (2160×3840 @ 60 FPS) ready for 4K source. Blurred background keeps entire video visible.'
+          : '9:16 vertical frame @ 60 FPS with blurred background (keeps entire video visible).';
       }
-      if (this.exportResolutionSelect) this.exportResolutionSelect.value = '1080p';
+      if (this.exportResolutionSelect) {
+        if (!this.exportResolutionSelect.value || this.exportResolutionSelect.value === '1080p' || this.exportResolutionSelect.value === 'source') {
+          this.exportResolutionSelect.value = is4kSource ? '4k' : '1080p';
+        }
+      }
+      if (this.exportFramingSelect && this.player && this.player.framingMode) {
+        this.exportFramingSelect.value = this.player.framingMode;
+      }
       if (this.exportFormatSelect) this.exportFormatSelect.value = 'mp4';
       if (this.exportExtBadge) this.exportExtBadge.textContent = '.mp4';
 
     } else {
       // Universal MP4: reveal resolution & format dropdowns
       if (this.advancedDropdownsGrid) this.advancedDropdownsGrid.style.display = 'grid';
+      if (this.exportFramingFormItem) this.exportFramingFormItem.style.display = 'none';
       if (this.lockedSettingsNote) this.lockedSettingsNote.style.display = 'none';
       const curFormat = this.exportFormatSelect ? this.exportFormatSelect.value : 'mp4';
       if (this.exportExtBadge) this.exportExtBadge.textContent = `.${curFormat === 'webm' ? 'webm' : 'mp4'}`;
@@ -225,6 +240,12 @@ class ExportManager {
       if (this.cardGodSpeed) this.cardGodSpeed.click();
     }
     this.updateEnginePreview();
+  }
+
+  syncFramingMode(mode) {
+    if (this.exportFramingSelect) {
+      this.exportFramingSelect.value = mode;
+    }
   }
 
   updateStats(segments, totalCut) {
@@ -303,6 +324,7 @@ class ExportManager {
     const customFileName = this.exportCustomFileName ? this.exportCustomFileName.value.trim() : '';
 
     const aspectRatio = (selectedMode === 'shorts-60fps') ? '9:16' : (this.player.aspectRatio || '16:9');
+    const framingMode = this.exportFramingSelect ? this.exportFramingSelect.value : ((this.player && this.player.framingMode) || 'blur');
     const cropOffsetX = this.player.cropOffsetX !== undefined ? this.player.cropOffsetX : 0.5;
     const zoomScale = this.player.zoomScale || 1.0;
 
@@ -334,6 +356,7 @@ class ExportManager {
           sourcePath: this.currentSourcePath || (segments[0] ? segments[0].sourcePath : null),
           segments,
           aspectRatio,
+          framingMode,
           cropOffsetX,
           panStart,
           panEnd,

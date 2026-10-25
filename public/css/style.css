@@ -497,20 +497,72 @@ body {
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
   box-shadow: 0 14px 45px rgba(0, 0, 0, 0.9);
+  cursor: default;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #05070a;
+}
+
+.player-container[data-aspect="9:16"][data-framing="crop"] {
   cursor: grab;
 }
 
-.player-container[data-aspect="9:16"]:active {
+.player-container[data-aspect="9:16"][data-framing="crop"]:active {
   cursor: grabbing;
+}
+
+/* Canvas for Realtime Blurred Ambient Background */
+.blurred-bg-canvas {
+  position: absolute;
+  top: -8%;
+  left: -8%;
+  width: 116%;
+  height: 116%;
+  object-fit: cover;
+  filter: blur(28px) brightness(0.68) saturate(1.25);
+  transform: scale(1.08);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* When Blurred Fit is active: full horizontal video centered in the middle */
+.player-container[data-aspect="9:16"][data-framing="blur"] #mainVideo {
+  width: 100%;
+  height: auto;
+  max-height: 100%;
+  object-fit: contain !important;
+  object-position: center center !important;
+  border-radius: var(--radius-xs);
+  box-shadow: 0 12px 35px rgba(0, 0, 0, 0.85);
+  z-index: 2;
+  position: relative;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* When Fill & Crop is active: standard cropped 9:16 view */
+.player-container[data-aspect="9:16"][data-framing="crop"] #mainVideo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover !important;
+  object-position: 50% center;
+  border-radius: var(--radius-sm);
+  z-index: 2;
+  position: relative;
+  transition: object-position 0.04s linear, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .player-container[data-aspect="9:16"] #mainVideo {
   width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: 50% center;
+  height: auto;
+  max-height: 100%;
+  object-fit: contain;
+  object-position: center center;
   border-radius: var(--radius-sm);
-  transition: object-position 0.04s linear, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 2;
+  position: relative;
 }
 
 /* =========================================================

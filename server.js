@@ -672,6 +672,7 @@ app.post('/api/export', async (req, res) => {
       mode = 'godspeed',
       outputFormat = 'mp4',
       resolution = 'source',
+      framingMode = 'blur',
       customFileName = null
     } = req.body;
 
@@ -753,6 +754,7 @@ app.post('/api/export', async (req, res) => {
       mode,
       outputFormat,
       resolution,
+      framingMode,
       customFileName,
       totalCutDuration
     }).catch(err => {
@@ -806,6 +808,7 @@ async function runExportPipeline(jobId, options) {
     mode = 'godspeed',
     outputFormat = 'mp4',
     resolution = 'source',
+    framingMode = 'blur',
     customFileName,
     totalCutDuration
   } = options;
@@ -829,9 +832,11 @@ async function runExportPipeline(jobId, options) {
 
   // Output filename
   const cleanCustom = customFileName && customFileName.trim() ? customFileName.trim().replace(/[^a-zA-Z0-9_-]/g, '_') : null;
+  const isPortrait4k = (aspectRatio === '9:16') && (resolution === '4k' || (resolution === 'source' && meta && (meta.width >= 3800 || meta.height >= 2000)));
+  const tag = isPortrait4k ? 'shorts_4k' : (aspectRatio === '9:16' ? 'shorts' : (mode === 'godspeed' ? 'cut' : 'export'));
   const finalOutName = cleanCustom
     ? `${cleanCustom}_${timestamp}${outExt}`
-    : `${baseName}_${aspectRatio === '9:16' ? 'shorts' : (mode === 'godspeed' ? 'cut' : 'export')}_${timestamp}${outExt}`;
+    : `${baseName}_${tag}_${timestamp}${outExt}`;
   const finalOutPath = path.resolve(EXPORT_DIR, finalOutName);
 
   // Format compatibility check for stream copy
@@ -1121,6 +1126,8 @@ async function runExportPipeline(jobId, options) {
       targetWidth = 2160; targetHeight = 3840;
     } else if (resolution === '720p') {
       targetWidth = 720; targetHeight = 1280;
+    } else if (resolution === 'source' && meta && (meta.width >= 3800 || meta.height >= 2000)) {
+      targetWidth = 2160; targetHeight = 3840;
     } else {
       targetWidth = 1080; targetHeight = 1920;
     }
@@ -1145,7 +1152,7 @@ async function runExportPipeline(jobId, options) {
   const targetFps = (aspectRatio === '9:16') ? 60 : (meta && meta.fps ? Math.round(meta.fps) : 60);
   const effectiveFps = targetFps > 0 ? targetFps : 60;
 
-  // Build Video Filter Generator: Supports per-clip zoom, framing offset, speed re-timing, and continuous motion pan
+  // Build Video Filter Generator: Supports per-clip zoom, framing offset, speed re-timing, and blurred background
   function buildVideoFilterForSegment(seg, idx = 0) {
     const segZoom = (seg && seg.zoomScale && seg.zoomScale > 1.05) ? seg.zoomScale : zoomScale;
     const hasSegZoom = segZoom > 1.05;
@@ -1154,19 +1161,46 @@ async function runExportPipeline(jobId, options) {
 
     let vf = '';
     if (aspectRatio === '9:16') {
-      if (hasMotionPan) {
-        vf = `crop=ih*9/16:ih:'(in_w-ih*9/16)*(${panStart}+(${panEnd}-${panStart})*(${chunkStartSeqTime}+t)/${Math.max(1, totalCutDuration)})':0`;
-      } else {
-        const offset = (segCropOffset !== undefined) ? segCropOffset : panStart;
-        vf = `crop=ih*9/16:ih:(in_w-ih*9/16)*${offset}:0`;
-      }
+      const isBlurMode = (seg && seg.framingMode) ? (seg.framingMode === 'blur') : (framingMode === 'blur');
+      if (isBlurMode) {
+        let speedPrefix = '';
+        if (seg && seg.speed && Math.abs(seg.speed - 1.0) > 0.01) {
+          const speedFactor = (1 / seg.speed).toFixed(6);
+          speedPrefix = `setpts=${speedFactor}*PTS,`;
+        }
 
-      if (hasSegZoom) {
-        const zw = Math.round(targetWidth * segZoom);
-        const zh = Math.round(targetHeight * segZoom);
-        vf += `,scale=${zw}:${zh}:flags=bicubic,crop=${targetWidth}:${targetHeight}:(iw-${targetWidth})/2:(ih-${targetHeight})/2`;
+        // Fast downscale-blur-upscale background for smooth ambient blur
+        const blurW = Math.round(targetWidth / 8);
+        const blurH = Math.round(targetHeight / 8);
+
+        // Foreground: full horizontal video centered in the middle without cropping
+        let fgFilter = `scale=${targetWidth}:-2:flags=bicubic`;
+        if (hasSegZoom) {
+          const zw = Math.round(targetWidth * segZoom);
+          fgFilter = `scale=${zw}:-2:flags=bicubic,crop=${targetWidth}:min(ih\\,${targetHeight}):(iw-${targetWidth})/2:(ih-min(ih\\,${targetHeight}))/2`;
+        }
+
+        vf = `${speedPrefix}split=2[fg_in][bg_in];` +
+             `[bg_in]scale=${blurW}:${blurH}:force_original_aspect_ratio=increase:flags=fast_bilinear,crop=${blurW}:${blurH},boxblur=15:2,scale=${targetWidth}:${targetHeight}:flags=fast_bilinear[bg];` +
+             `[fg_in]${fgFilter}[fg];` +
+             `[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=${effectiveFps},format=yuv420p`;
+        return vf;
       } else {
-        vf += `,scale=${targetWidth}:${targetHeight}:flags=bicubic`;
+        // Crop / Pan framing
+        if (hasMotionPan) {
+          vf = `crop=ih*9/16:ih:'(in_w-ih*9/16)*(${panStart}+(${panEnd}-${panStart})*(${chunkStartSeqTime}+t)/${Math.max(1, totalCutDuration)})':0`;
+        } else {
+          const offset = (segCropOffset !== undefined) ? segCropOffset : panStart;
+          vf = `crop=ih*9/16:ih:(in_w-ih*9/16)*${offset}:0`;
+        }
+
+        if (hasSegZoom) {
+          const zw = Math.round(targetWidth * segZoom);
+          const zh = Math.round(targetHeight * segZoom);
+          vf += `,scale=${zw}:${zh}:flags=bicubic,crop=${targetWidth}:${targetHeight}:(iw-${targetWidth})/2:(ih-${targetHeight})/2`;
+        } else {
+          vf += `,scale=${targetWidth}:${targetHeight}:flags=bicubic`;
+        }
       }
     } else {
       // 16:9
@@ -1223,7 +1257,9 @@ async function runExportPipeline(jobId, options) {
     ];
   } else {
     // H.264: Route through NVENC, QSV, AMF, or software fallback libx264
-    const hwEnc = getH264Encoder();
+    // If targetHeight > 2160 (e.g. 2160x3840 4K portrait), Intel QSV hardware encoder
+    // does not support height > 2160; route cleanly to high-speed multithreaded libx264
+    const hwEnc = (targetHeight > 2160) ? 'libx264' : getH264Encoder();
     if (hwEnc === 'h264_nvenc') {
       videoCodecArgs = [
         '-c:v', 'h264_nvenc',

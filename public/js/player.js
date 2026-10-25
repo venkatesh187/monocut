@@ -498,7 +498,21 @@ class VideoPlayer {
       if (seg.cropOffsetX !== undefined) {
         this.setCropOffset(seg.cropOffsetX, true, false);
       }
+      this.syncClipPlaybackRate(seg);
     }
+  }
+
+  syncClipPlaybackRate(seg) {
+    if (!this.video) return;
+    const activeSeg = seg || (window.timeline && window.timeline.segments && window.timeline.segments.find(s => s.id === window.timeline.activeClipId));
+    const clipSpeed = (activeSeg && activeSeg.speed) ? activeSeg.speed : 1.0;
+    const effectiveRate = Math.max(0.05, Math.min(16.0, (this.playbackRate || 1.0) * clipSpeed));
+    try {
+      this.video.preservesPitch = true;
+      if (Math.abs(this.video.playbackRate - effectiveRate) > 0.01) {
+        this.video.playbackRate = effectiveRate;
+      }
+    } catch (e) {}
   }
 
   // =========================================================
@@ -731,14 +745,23 @@ class VideoPlayer {
       });
     }
 
-    const frameDuration = 1 / (this.fps || 60);
-    const lookahead = Math.max(0.016, frameDuration * (this.playbackRate || 1.0) * 1.25);
-
     if (curIdx !== -1) {
       const curSeg = segs[curIdx];
+      const clipSpeed = curSeg.speed || 1.0;
+      const effectiveRate = Math.max(0.05, Math.min(16.0, (this.playbackRate || 1.0) * clipSpeed));
+
+      try {
+        this.video.preservesPitch = true;
+        if (Math.abs(this.video.playbackRate - effectiveRate) > 0.01) {
+          this.video.playbackRate = effectiveRate;
+        }
+      } catch (e) {}
+
+      const frameDuration = 1 / (this.fps || 60);
+      const lookahead = Math.max(0.016, frameDuration * effectiveRate * 1.25);
 
       // Multi-clip pre-warming: pre-buffer next clip within 1.5 seconds of clip boundary
-      const timeRemainingInClip = curSeg.end - curTime;
+      const timeRemainingInClip = (curSeg.end - curTime) / clipSpeed;
       if (timeRemainingInClip <= 1.5 && timeRemainingInClip > 0) {
         const upcomingSeg = (curIdx < segs.length - 1) ? segs[curIdx + 1] : (this.isLooping ? segs[0] : null);
         if (upcomingSeg) {
@@ -751,7 +774,7 @@ class VideoPlayer {
         if (curIdx < segs.length - 1) {
           const nextSeg = segs[curIdx + 1];
 
-          // CRITICAL OPTIMIZATION: Contiguous split clips from the SAME video!
+          // CRITICAL OPTIMIZATION: Contiguous split clips from the SAME video with SAME speed!
           // If the next clip starts where the current clip ends, playback is already smooth!
           // NEVER seek! Simply advance activeClipId with zero decoder stall or frame breaking!
           const sameSource = (!nextSeg.sourceUri || !curSeg.sourceUri || nextSeg.sourceUri === curSeg.sourceUri);

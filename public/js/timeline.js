@@ -74,6 +74,15 @@ class Timeline {
     this.btnUndoAction = document.getElementById('btnUndoAction');
     this.btnRedoAction = document.getElementById('btnRedoAction');
 
+    // Selected Clip Playback Speed Controls
+    this.btnClipSpeedPill = document.getElementById('btnClipSpeedPill');
+    this.clipSpeedDisplay = document.getElementById('clipSpeedDisplay');
+    this.clipSpeedPopover = document.getElementById('clipSpeedPopover');
+    this.clipSpeedCurrentDisplay = document.getElementById('clipSpeedCurrentDisplay');
+    this.clipSpeedCustomInput = document.getElementById('clipSpeedCustomInput');
+    this.btnApplyClipCustomSpeed = document.getElementById('btnApplyClipCustomSpeed');
+    this.clipSpeedRangeSlider = document.getElementById('clipSpeedRangeSlider');
+
     this.sourceDuration = 0; // Total raw source video length
     this.totalDuration = 0;  // Total sequence duration of all kept clips combined
     this.segments = [];      // [{ id, start, end, name }]
@@ -259,6 +268,68 @@ class Timeline {
       }, { passive: false });
     }
 
+    // Clip Speed Pill Toggle & Popover
+    if (this.btnClipSpeedPill) {
+      this.btnClipSpeedPill.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.toggleClipSpeedPopover();
+      });
+    }
+
+    if (this.btnApplyClipCustomSpeed) {
+      this.btnApplyClipCustomSpeed.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const val = parseFloat(this.clipSpeedCustomInput.value);
+        if (!isNaN(val) && val > 0) {
+          this.setClipSpeed(this.activeClipId, val);
+          this.toggleClipSpeedPopover(false);
+        }
+      });
+    }
+
+    if (this.clipSpeedCustomInput) {
+      this.clipSpeedCustomInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const val = parseFloat(this.clipSpeedCustomInput.value);
+          if (!isNaN(val) && val > 0) {
+            this.setClipSpeed(this.activeClipId, val);
+            this.toggleClipSpeedPopover(false);
+          }
+        }
+      });
+    }
+
+    if (this.clipSpeedRangeSlider) {
+      this.clipSpeedRangeSlider.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        if (!isNaN(val) && val > 0) {
+          this.setClipSpeed(this.activeClipId, val, false);
+        }
+      });
+    }
+
+    // Clip Speed Presets
+    document.querySelectorAll('.clip-speed-preset-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const speed = parseFloat(btn.dataset.speed);
+        if (!isNaN(speed)) {
+          this.setClipSpeed(this.activeClipId, speed);
+          this.toggleClipSpeedPopover(false);
+        }
+      });
+    });
+
+    // Dismiss popover when clicking outside
+    document.addEventListener('click', (e) => {
+      if (this.clipSpeedPopover && this.clipSpeedPopover.style.display !== 'none') {
+        if (!this.clipSpeedPopover.contains(e.target) && !e.target.closest('#btnClipSpeedPill') && !e.target.closest('.clip-speed-tag') && !e.target.closest('.seg-speed-btn')) {
+          this.toggleClipSpeedPopover(false);
+        }
+      }
+    });
+
     window.addEventListener('resize', () => {
       this.render();
     });
@@ -274,6 +345,7 @@ class Timeline {
       id: 'clip_0',
       start: 0,
       end: this.sourceDuration,
+      speed: 1.0,
       name: meta.fileName || 'Clip 1',
       sourcePath: meta.filePath || meta.fileName,
       sourceUri: streamUri,
@@ -324,6 +396,7 @@ class Timeline {
       id: clipId,
       start: 0,
       end: dur,
+      speed: 1.0,
       sourcePath: meta.filePath || meta.fileName,
       sourceUri: streamUri,
       sourceDuration: dur,
@@ -366,7 +439,74 @@ class Timeline {
   }
 
   recalculateSequenceDuration() {
-    this.totalDuration = this.segments.reduce((sum, s) => sum + Math.max(0, s.end - s.start), 0);
+    this.totalDuration = this.segments.reduce((sum, s) => sum + Math.max(0.05, (s.end - s.start) / (s.speed || 1.0)), 0);
+  }
+
+  toggleClipSpeedPopover(forceState) {
+    if (!this.clipSpeedPopover) return;
+    const shouldOpen = forceState !== undefined ? forceState : (this.clipSpeedPopover.style.display === 'none');
+    this.clipSpeedPopover.style.display = shouldOpen ? 'flex' : 'none';
+    if (this.btnClipSpeedPill) {
+      this.btnClipSpeedPill.classList.toggle('menu-open', shouldOpen);
+    }
+    if (shouldOpen) {
+      this.updateClipSpeedUI();
+      if (this.clipSpeedCustomInput) {
+        setTimeout(() => this.clipSpeedCustomInput.select(), 50);
+      }
+    }
+  }
+
+  setClipSpeed(clipId, newSpeed, updateInputs = true) {
+    if (!this.segments || this.segments.length === 0) return;
+    const targetId = clipId || this.activeClipId || (this.segments[0] && this.segments[0].id);
+    const seg = this.segments.find(s => s.id === targetId);
+    if (!seg) return;
+
+    const rate = Math.max(0.05, Math.min(16.0, parseFloat(newSpeed) || 1.0));
+    const rounded = Math.round(rate * 100) / 100;
+    seg.speed = rounded;
+
+    this.recalculateSequenceDuration();
+    this.pushHistory();
+    this.updateClipSpeedUI(seg, updateInputs);
+    this.render();
+
+    if (this.player && typeof this.player.syncClipPlaybackRate === 'function') {
+      this.player.syncClipPlaybackRate(seg);
+    }
+
+    const clipIdx = this.segments.findIndex(s => s.id === seg.id);
+    this.showTimelineNotice(`Set Clip #${clipIdx + 1} speed to ${rounded}x`);
+  }
+
+  updateClipSpeedUI(seg, updateInputs = true) {
+    const activeSeg = seg || this.segments.find(s => s.id === this.activeClipId) || this.segments[0];
+    const speed = (activeSeg && activeSeg.speed) ? activeSeg.speed : 1.0;
+
+    if (this.clipSpeedDisplay) {
+      this.clipSpeedDisplay.textContent = `${speed}x`;
+    }
+    if (this.clipSpeedCurrentDisplay) {
+      this.clipSpeedCurrentDisplay.textContent = `${speed}x`;
+    }
+    if (this.btnClipSpeedPill) {
+      this.btnClipSpeedPill.classList.toggle('modified', Math.abs(speed - 1.0) > 0.01);
+    }
+
+    if (updateInputs) {
+      if (this.clipSpeedCustomInput) {
+        this.clipSpeedCustomInput.value = speed;
+      }
+      if (this.clipSpeedRangeSlider) {
+        this.clipSpeedRangeSlider.value = Math.min(5.0, Math.max(0.1, speed));
+      }
+    }
+
+    document.querySelectorAll('.clip-speed-preset-btn').forEach(btn => {
+      const bSpeed = parseFloat(btn.dataset.speed);
+      btn.classList.toggle('active', Math.abs(bSpeed - speed) < 0.01);
+    });
   }
 
   pushHistory() {
@@ -466,7 +606,8 @@ class Timeline {
       let acc = 0;
       for (let i = 0; i < this.segments.length; i++) {
         const seg = this.segments[i];
-        const dur = Math.max(0, seg.end - seg.start);
+        const segSpeed = seg.speed || 1.0;
+        const dur = Math.max(0.05, (seg.end - seg.start) / segSpeed);
         if (seg.id === this.activeClipId) {
           const uriMatches = !curUri || !seg.sourceUri || seg.sourceUri === curUri;
           if (uriMatches && sourceTime >= (seg.start - 0.05) && sourceTime <= (seg.end + 0.05)) {
@@ -484,7 +625,8 @@ class Timeline {
       let acc = 0;
       for (let i = 0; i < this.segments.length; i++) {
         const seg = this.segments[i];
-        const dur = Math.max(0, seg.end - seg.start);
+        const segSpeed = seg.speed || 1.0;
+        const dur = Math.max(0.05, (seg.end - seg.start) / segSpeed);
         const uriMatches = !curUri || !seg.sourceUri || seg.sourceUri === curUri;
         const isLast = (i === this.segments.length - 1);
         const inClip = isLast
@@ -505,9 +647,10 @@ class Timeline {
     }
 
     if (targetSeg) {
-      const dur = Math.max(0, targetSeg.end - targetSeg.start);
+      const segSpeed = targetSeg.speed || 1.0;
+      const dur = Math.max(0.05, (targetSeg.end - targetSeg.start) / segSpeed);
       const clampedSourceTime = Math.max(targetSeg.start, Math.min(targetSeg.end, sourceTime));
-      const offsetInClip = clampedSourceTime - targetSeg.start;
+      const offsetInClip = (clampedSourceTime - targetSeg.start) / segSpeed;
       const seqTime = targetAcc + offsetInClip;
       const pct = Math.max(0, Math.min(1, seqTime / this.totalDuration));
 
@@ -533,6 +676,8 @@ class Timeline {
       let minDiff = Infinity;
       let accDur = 0;
       for (const seg of this.segments) {
+        const segSpeed = seg.speed || 1.0;
+        const dur = Math.max(0.05, (seg.end - seg.start) / segSpeed);
         const uriMatches = !curUri || !seg.sourceUri || seg.sourceUri === curUri;
         if (uriMatches) {
           if (Math.abs(sourceTime - seg.start) < minDiff) {
@@ -541,10 +686,10 @@ class Timeline {
           }
           if (Math.abs(sourceTime - seg.end) < minDiff) {
             minDiff = Math.abs(sourceTime - seg.end);
-            closestSeqTime = accDur + (seg.end - seg.start);
+            closestSeqTime = accDur + dur;
           }
         }
-        accDur += (seg.end - seg.start);
+        accDur += dur;
       }
       this.player.timeCurrent.textContent = this.player.formatTimecode(closestSeqTime);
       this.player.timeTotal.textContent = this.player.formatTimecode(this.totalDuration);
@@ -608,10 +753,11 @@ class Timeline {
     let targetSeg = null;
     for (let i = 0; i < this.segments.length; i++) {
       const seg = this.segments[i];
-      const dur = seg.end - seg.start;
+      const segSpeed = seg.speed || 1.0;
+      const dur = Math.max(0.05, (seg.end - seg.start) / segSpeed);
       if (targetSeqTime <= (acc + dur) || i === this.segments.length - 1) {
         const offsetInClip = Math.max(0, Math.min(dur, targetSeqTime - acc));
-        sourceTime = seg.start + offsetInClip;
+        sourceTime = seg.start + (offsetInClip * segSpeed);
         targetSeg = seg;
         break;
       }
@@ -668,7 +814,8 @@ class Timeline {
     let acc = 0;
     for (let i = 0; i < this.segments.length - 1; i++) {
       const seg = this.segments[i];
-      acc += (seg.end - seg.start);
+      const segSpeed = seg.speed || 1.0;
+      acc += Math.max(0.05, (seg.end - seg.start) / segSpeed);
       snapPoints.push(acc);
     }
 
@@ -698,11 +845,12 @@ class Timeline {
       let acc = 0;
       for (let i = 0; i < this.segments.length; i++) {
         const seg = this.segments[i];
-        const dur = Math.max(0, seg.end - seg.start);
+        const segSpeed = seg.speed || 1.0;
+        const dur = Math.max(0.05, (seg.end - seg.start) / segSpeed);
         if (seg.id === this.activeClipId) {
           const uriMatches = !curUri || !seg.sourceUri || seg.sourceUri === curUri;
           if (uriMatches && curSource >= (seg.start - 0.05) && curSource <= (seg.end + 0.05)) {
-            const offset = Math.max(0, Math.min(dur, curSource - seg.start));
+            const offset = Math.max(0, Math.min(dur, (curSource - seg.start) / segSpeed));
             return acc + offset;
           }
         }
@@ -714,7 +862,8 @@ class Timeline {
     let acc = 0;
     for (let i = 0; i < this.segments.length; i++) {
       const seg = this.segments[i];
-      const dur = Math.max(0, seg.end - seg.start);
+      const segSpeed = seg.speed || 1.0;
+      const dur = Math.max(0.05, (seg.end - seg.start) / segSpeed);
       const uriMatches = !curUri || !seg.sourceUri || seg.sourceUri === curUri;
       const isLast = (i === this.segments.length - 1);
       const inClip = isLast
@@ -722,7 +871,7 @@ class Timeline {
         : (curSource >= (seg.start - 0.05) && curSource < seg.end);
 
       if (uriMatches && inClip) {
-        const offset = Math.max(0, Math.min(dur, curSource - seg.start));
+        const offset = Math.max(0, Math.min(dur, (curSource - seg.start) / segSpeed));
         return acc + offset;
       }
       acc += dur;
@@ -747,10 +896,11 @@ class Timeline {
     let acc = 0;
     for (let i = 0; i < this.segments.length; i++) {
       const seg = this.segments[i];
-      const dur = seg.end - seg.start;
+      const segSpeed = seg.speed || 1.0;
+      const dur = Math.max(0.05, (seg.end - seg.start) / segSpeed);
       if (clampedSeq <= (acc + dur) || i === this.segments.length - 1) {
         const offsetInClip = Math.max(0, Math.min(dur, clampedSeq - acc));
-        const sourceTime = seg.start + offsetInClip;
+        const sourceTime = seg.start + (offsetInClip * segSpeed);
 
         if (this.activeClipId !== seg.id) {
           this.activeClipId = seg.id;
@@ -886,10 +1036,11 @@ class Timeline {
       let acc = 0;
       for (let i = 0; i < this.segments.length; i++) {
         const s = this.segments[i];
-        const dur = Math.max(0, s.end - s.start);
+        const segSpeed = s.speed || 1.0;
+        const dur = Math.max(0.05, (s.end - s.start) / segSpeed);
         if (seqTime >= acc && (seqTime < acc + dur || i === this.segments.length - 1)) {
           targetIdx = i;
-          offsetInClip = Math.max(0, Math.min(dur, seqTime - acc));
+          offsetInClip = Math.max(0, Math.min(s.end - s.start, (seqTime - acc) * segSpeed));
           break;
         }
         acc += dur;
@@ -1366,7 +1517,7 @@ class Timeline {
     let accDuration = 0;
 
     this.segments.forEach((seg, idx) => {
-      const clipDuration = Math.max(0.1, seg.end - seg.start);
+      const clipDuration = Math.max(0.05, (seg.end - seg.start) / (seg.speed || 1.0));
       const clipEl = document.createElement('div');
       clipEl.className = `timeline-clip-card ${seg.id === this.activeClipId ? 'active' : ''}`;
       clipEl.dataset.id = seg.id;
@@ -1392,11 +1543,23 @@ class Timeline {
       const info = document.createElement('div');
       info.className = 'clip-info-overlay';
       const durSec = clipDuration.toFixed(1);
+      const speedVal = (seg.speed && Math.abs(seg.speed - 1.0) > 0.01) ? `${seg.speed}x` : '';
       info.innerHTML = `
         <span class="clip-label-text">${seg.name || `Clip ${idx + 1}`}</span>
+        ${speedVal ? `<span class="clip-speed-tag ${seg.speed > 1 ? 'fast' : 'slow'}" data-clip-id="${seg.id}" title="Clip Speed: ${speedVal} (Click to customize)">⚡ ${speedVal}</span>` : ''}
         <span class="clip-duration-text">${durSec}s</span>
       `;
       clipEl.appendChild(info);
+
+      const speedTag = info.querySelector('.clip-speed-tag');
+      if (speedTag) {
+        speedTag.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.activeClipId = seg.id;
+          this.highlightActive();
+          this.toggleClipSpeedPopover(true);
+        });
+      }
 
       // Left Trim Handle (White pill with grip)
       const isLeftSelected = this.selectedEditPoint && this.selectedEditPoint.clipId === seg.id && this.selectedEditPoint.type === 'start';
@@ -2074,7 +2237,7 @@ class Timeline {
 
     let newSeqTime = 0;
     for (let m = 0; m < targetIdx; m++) {
-      newSeqTime += (this.segments[m].end - this.segments[m].start);
+      newSeqTime += (this.segments[m].end - this.segments[m].start) / (this.segments[m].speed || 1.0);
     }
     this.seekToSequenceTime(newSeqTime, false);
     this.showTimelineNotice(`Moved "${movedSeg.name || 'Clip'}" to position #${targetIdx + 1} [Alt+${direction < 0 ? '←' : '→'}]`);
@@ -2103,7 +2266,9 @@ class Timeline {
       card.dataset.id = seg.id;
       card.draggable = true;
 
-      const dur = (seg.end - seg.start).toFixed(1);
+      const speedVal = (seg.speed || 1.0);
+      const isSpeedModified = Math.abs(speedVal - 1.0) > 0.01;
+      const dur = (Math.max(0.05, (seg.end - seg.start) / speedVal)).toFixed(1);
       const startTc = formatCardTc(seg.start);
       const endTc = formatCardTc(seg.end);
 
@@ -2113,12 +2278,23 @@ class Timeline {
         </button>
         <span class="seg-number">#${idx + 1}</span>
         <span class="seg-range">${startTc} → ${endTc}</span>
+        <button class="seg-speed-btn ${isSpeedModified ? 'modified' : ''}" data-clip-id="${seg.id}" title="Clip Speed: ${speedVal}x (Click to customize)">${speedVal}x</button>
         <span class="seg-length">${dur}s</span>
         <button class="seg-move-btn seg-move-right" title="Move Right (Alt+→)" ${idx === this.segments.length - 1 ? 'disabled' : ''}>
           <i data-feather="chevron-right"></i>
         </button>
         <button class="seg-remove-btn" title="Delete Clip"><i data-feather="x"></i></button>
       `;
+
+      const btnSpeed = card.querySelector('.seg-speed-btn');
+      if (btnSpeed) {
+        btnSpeed.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.activeClipId = seg.id;
+          this.highlightActive();
+          this.toggleClipSpeedPopover(true);
+        });
+      }
 
       const btnLeft = card.querySelector('.seg-move-left');
       if (btnLeft) {
@@ -2188,7 +2364,7 @@ class Timeline {
 
             let newSeqTime = 0;
             for (let m = 0; m < finalIdx; m++) {
-              newSeqTime += (this.segments[m].end - this.segments[m].start);
+              newSeqTime += (this.segments[m].end - this.segments[m].start) / (this.segments[m].speed || 1.0);
             }
             this.seekToSequenceTime(newSeqTime, false);
             this.showTimelineNotice(`Moved "${movedItem.name || 'Clip'}" to position #${finalIdx + 1}`);
@@ -2231,6 +2407,7 @@ class Timeline {
         ((isStart && this.selectedEditPoint.type === 'start') || (!isStart && this.selectedEditPoint.type === 'end'));
       el.classList.toggle('selected', !!isSelected);
     });
+    this.updateClipSpeedUI();
     if (this.player && typeof this.player.syncActiveClipProperties === 'function') {
       this.player.syncActiveClipProperties();
     }
@@ -2275,6 +2452,7 @@ class Timeline {
       sourcePath: s.sourcePath || (this.player.meta ? this.player.meta.filePath : null),
       start: Math.round(s.start * 1000) / 1000,
       end: Math.round(s.end * 1000) / 1000,
+      speed: s.speed || 1.0,
       name: s.name,
       muted: !!s.muted,
       zoomScale: s.zoomScale || 1.0,

@@ -718,7 +718,7 @@ app.post('/api/export', async (req, res) => {
 
     const meta = await probeVideo(effectiveSource);
     const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-    const totalCutDuration = resolvedSegments.reduce((sum, seg) => sum + (seg.end - seg.start), 0);
+    const totalCutDuration = resolvedSegments.reduce((sum, seg) => sum + Math.max(0.05, (seg.end - seg.start) / (seg.speed || 1.0)), 0);
 
     const job = {
       jobId,
@@ -796,9 +796,10 @@ async function runExportPipeline(jobId, options) {
   const baseName = path.basename(sourcePath, path.extname(sourcePath)).replace(/[^a-zA-Z0-9_-]/g, '_');
   const srcExt = (path.extname(sourcePath) || '.webm').toLowerCase();
 
-  // Multi-source & audio mute checks
+  // Multi-source, audio mute & speed alteration checks
   const hasMultipleSources = segments.some(s => s.sourcePath && s.sourcePath !== sourcePath);
   const anyMuted = segments.some(s => s.muted);
+  const anySpeedChange = segments.some(s => s.speed && Math.abs(s.speed - 1.0) > 0.01);
   const allSameExt = segments.every(s => !s.sourcePath || path.extname(s.sourcePath).toLowerCase() === srcExt);
   const hasZoom = zoomScale && zoomScale > 1.05;
   const hasMotionPan = Math.abs(panEnd - panStart) > 0.05;
@@ -829,6 +830,7 @@ async function runExportPipeline(jobId, options) {
                       !hasZoom &&
                       !hasMotionPan &&
                       !anyMuted &&
+                      !anySpeedChange &&
                       allSameExt &&
                       formatMatchesSource;
 
@@ -1008,12 +1010,12 @@ async function runExportPipeline(jobId, options) {
   const targetFps = (aspectRatio === '9:16') ? 60 : (meta && meta.fps ? Math.round(meta.fps) : 60);
   const effectiveFps = targetFps > 0 ? targetFps : 60;
 
-  // Build Video Filter Generator: Supports per-clip zoom, framing offset, and continuous motion pan
+  // Build Video Filter Generator: Supports per-clip zoom, framing offset, speed re-timing, and continuous motion pan
   function buildVideoFilterForSegment(seg, idx = 0) {
     const segZoom = (seg && seg.zoomScale && seg.zoomScale > 1.05) ? seg.zoomScale : zoomScale;
     const hasSegZoom = segZoom > 1.05;
     const segCropOffset = (seg && seg.cropOffsetX !== undefined) ? seg.cropOffsetX : cropOffsetX;
-    const chunkStartSeqTime = segments.slice(0, idx).reduce((sum, s) => sum + Math.max(0, s.end - s.start), 0);
+    const chunkStartSeqTime = segments.slice(0, idx).reduce((sum, s) => sum + Math.max(0, (s.end - s.start) / (s.speed || 1.0)), 0);
 
     let vf = '';
     if (aspectRatio === '9:16') {
@@ -1042,12 +1044,45 @@ async function runExportPipeline(jobId, options) {
       }
     }
 
+    // Apply PTS re-timing if clip has customized speed
+    if (seg && seg.speed && Math.abs(seg.speed - 1.0) > 0.01) {
+      const speedFactor = (1 / seg.speed).toFixed(6);
+      vf = `setpts=${speedFactor}*PTS,` + vf;
+    }
+
     // VFR-to-CFR & Stream Normalization: lock SAR=1, exact target CFR, and YUV420p format
     vf += `,setsar=1,fps=${effectiveFps},format=yuv420p`;
     return vf;
   }
 
   const defaultVideoFilter = buildVideoFilterForSegment(segments[0], 0);
+
+  // Chained Audio Tempo Filter generator (supporting any custom speed from 0.05x to 16.0x)
+  function buildAudioTempoFilter(speed) {
+    let s = speed;
+    const filters = [];
+    while (s > 2.0) {
+      filters.push('atempo=2.0');
+      s /= 2.0;
+    }
+    while (s < 0.5) {
+      filters.push('atempo=0.5');
+      s /= 0.5;
+    }
+    if (Math.abs(s - 1.0) > 0.001 || filters.length === 0) {
+      filters.push('atempo=' + s.toFixed(4));
+    }
+    return filters.join(',');
+  }
+
+  function buildAudioFilterForSegment(seg) {
+    const baseAudioFilter = 'aresample=48000:async=1:first_pts=0,aformat=sample_fmts=fltp:channel_layouts=stereo';
+    if (!seg || !seg.speed || Math.abs(seg.speed - 1.0) <= 0.01) {
+      return baseAudioFilter;
+    }
+    const tempoFilter = buildAudioTempoFilter(seg.speed);
+    return `${tempoFilter},${baseAudioFilter}`;
+  }
 
   // Audio Timestamp Alignment & Resampling Filter for native audio
   const audioFilter = 'aresample=48000:async=1:first_pts=0,aformat=sample_fmts=fltp:channel_layouts=stereo';
@@ -1120,7 +1155,12 @@ async function runExportPipeline(jobId, options) {
       const found = findFileOnSystem(path.basename(segSrc));
       if (found) segSrc = found;
     }
-    const segDur = Math.max(0.05, seg.end - seg.start);
+    const segSpeed = (seg && seg.speed && seg.speed > 0.04) ? seg.speed : 1.0;
+    const rawSegDur = Math.max(0.05, seg.end - seg.start);
+    const segDur = rawSegDur / segSpeed;
+
+    job.stage = `Encoding final video (${mode === 'shorts-60fps' ? 'YouTube Shorts 60fps' : 'Parallel compute'})${segSpeed !== 1.0 ? ` [${segSpeed}x Speed]` : ''}...`;
+
     const args = ['-y'];
     const hwaccel = getHwaccel();
     if (hwaccel) {
@@ -1128,7 +1168,7 @@ async function runExportPipeline(jobId, options) {
     }
     args.push(
       '-ss', String(seg.start),
-      '-t', String(segDur),
+      '-t', String(rawSegDur),
       '-i', segSrc,
       '-avoid_negative_ts', 'make_zero'
     );
@@ -1147,8 +1187,11 @@ async function runExportPipeline(jobId, options) {
       args.push('-f', 'lavfi', '-t', String(segDur), '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000');
     }
 
-    if (defaultVideoFilter) args.push('-vf', defaultVideoFilter);
-    if (includeAudio && audioFilter && !audioCodecArgs.includes('copy')) args.push('-af', audioFilter);
+    const segVideoFilter = buildVideoFilterForSegment(seg, 0);
+    if (segVideoFilter) args.push('-vf', segVideoFilter);
+    const segAudioFilter = buildAudioFilterForSegment(seg);
+    if (includeAudio && segAudioFilter && !audioCodecArgs.includes('copy')) args.push('-af', segAudioFilter);
+    args.push('-t', String(segDur));
     args.push(...videoCodecArgs);
     args.push(...audioCodecArgs);
     if (!includeAudio) {
@@ -1187,8 +1230,10 @@ async function runExportPipeline(jobId, options) {
           tempClips[i] = clipOutPath;
           job.tempFiles.add(clipOutPath);
 
-          const segDur = Math.max(0.05, seg.end - seg.start);
-          job.stage = `Rendering clip ${i + 1} of ${segments.length} (${path.basename(segSrc)})...`;
+          const segSpeed = (seg && seg.speed && seg.speed > 0.04) ? seg.speed : 1.0;
+          const rawSegDur = Math.max(0.05, seg.end - seg.start);
+          const segDur = rawSegDur / segSpeed;
+          job.stage = `Rendering clip ${i + 1} of ${segments.length} (${path.basename(segSrc)})${segSpeed !== 1.0 ? ` [${segSpeed}x Speed]` : ''}...`;
 
           // Check if segment has audio track and whether clip is muted
           let segHasAudio = true;
@@ -1208,7 +1253,7 @@ async function runExportPipeline(jobId, options) {
           }
           chunkArgs.push(
             '-ss', String(seg.start),
-            '-t', String(segDur),
+            '-t', String(rawSegDur),
             '-i', segSrc,
             '-avoid_negative_ts', 'make_zero'
           );
@@ -1219,9 +1264,11 @@ async function runExportPipeline(jobId, options) {
 
           const segFilter = buildVideoFilterForSegment(seg, i);
           if (segFilter) chunkArgs.push('-vf', segFilter);
-          if (includeAudio && audioFilter && !audioCodecArgs.includes('copy')) {
-            chunkArgs.push('-af', audioFilter);
+          const segAudioFilter = buildAudioFilterForSegment(seg);
+          if (includeAudio && segAudioFilter && !audioCodecArgs.includes('copy')) {
+            chunkArgs.push('-af', segAudioFilter);
           }
+          chunkArgs.push('-t', String(segDur));
           chunkArgs.push(...videoCodecArgs);
           chunkArgs.push(...audioCodecArgs);
           if (!includeAudio) {

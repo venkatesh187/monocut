@@ -231,6 +231,11 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (e.altKey && (e.key === 'ArrowRight' || e.key === 'Right')) {
       e.preventDefault();
       timeline.moveActiveClip(1);
+    } else if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      if (typeof timeline.toggleClipSpeedPopover === 'function') {
+        timeline.toggleClipSpeedPopover();
+      }
     } else if (e.key === '=' || e.key === '+') {
       e.preventDefault();
       timeline.zoomIn();

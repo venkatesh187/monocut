@@ -309,6 +309,55 @@
 
           <div class="toolbar-divider"></div>
 
+          <!-- Selected Clip Playback Speed & Custom Speed Popover -->
+          <div class="clip-speed-selector-container">
+            <button class="action-btn clip-speed-pill" id="btnClipSpeedPill" title="Selected Clip Speed (Click to customize speed for this clip)">
+              <i data-feather="fast-forward"></i>
+              <span>Speed:</span>
+              <span class="clip-speed-val" id="clipSpeedDisplay">1.0x</span>
+              <i data-feather="chevron-down" class="clip-speed-chevron"></i>
+            </button>
+
+            <!-- Custom Clip Speed Dropdown Popover -->
+            <div class="speed-popover-card clip-speed-popover-card" id="clipSpeedPopover" style="display: none;">
+              <div class="speed-popover-header">
+                <span class="speed-title"><i data-feather="fast-forward"></i> Clip Speed</span>
+                <span class="speed-current-val" id="clipSpeedCurrentDisplay">1.0x</span>
+              </div>
+
+              <!-- Direct Number Input (User Enters Custom Speed) -->
+              <div class="speed-custom-input-row">
+                <label for="clipSpeedCustomInput">Enter Value:</label>
+                <div class="speed-input-box">
+                  <input type="number" id="clipSpeedCustomInput" min="0.05" max="16.0" step="0.05" value="1.0" placeholder="1.0">
+                  <span class="speed-unit">x</span>
+                  <button class="btn btn-tiny btn-primary" id="btnApplyClipCustomSpeed">Apply</button>
+                </div>
+              </div>
+
+              <!-- Speed Slider -->
+              <div class="speed-slider-row">
+                <span class="slider-end-label">0.1x</span>
+                <input type="range" id="clipSpeedRangeSlider" min="0.1" max="5.0" step="0.05" value="1.0" class="speed-slider">
+                <span class="slider-end-label">5.0x</span>
+              </div>
+
+              <!-- Quick Presets Grid -->
+              <div class="speed-presets-grid clip-speed-presets-grid">
+                <button class="clip-speed-preset-btn" data-speed="0.25">0.25×</button>
+                <button class="clip-speed-preset-btn" data-speed="0.5">0.5×</button>
+                <button class="clip-speed-preset-btn" data-speed="0.75">0.75×</button>
+                <button class="clip-speed-preset-btn active" data-speed="1.0">1.0×</button>
+                <button class="clip-speed-preset-btn" data-speed="1.25">1.25×</button>
+                <button class="clip-speed-preset-btn" data-speed="1.5">1.5×</button>
+                <button class="clip-speed-preset-btn" data-speed="2.0">2.0×</button>
+                <button class="clip-speed-preset-btn" data-speed="4.0">4.0×</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="toolbar-divider"></div>
+
           <button class="action-btn delete-btn" id="btnDeleteClip" title="Delete selected clip (Del)">
             <i data-feather="trash-2"></i>
             <span>Delete [Del]</span>
@@ -635,6 +684,7 @@
             <div class="sc-row"><span>Trim Start to Playhead</span><kbd>[</kbd></div>
             <div class="sc-row"><span>Trim End to Playhead</span><kbd>]</kbd></div>
             <div class="sc-row"><span>Move Clip Left / Right</span><kbd>Alt + ←</kbd> / <kbd>Alt + →</kbd></div>
+            <div class="sc-row"><span>Customize Clip Speed</span><kbd>R</kbd></div>
             <div class="sc-row"><span>Timeline Zoom In / Out</span><kbd>+</kbd> / <kbd>-</kbd></div>
             <div class="sc-row"><span>Fit Timeline to Window</span><kbd>Shift + Z</kbd></div>
             <div class="sc-row"><span>Zoom Timeline (Wheel)</span><kbd>Alt + Scroll</kbd></div>

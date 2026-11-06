@@ -299,33 +299,70 @@ function probeVideo(filePath) {
 }
 
 /**
- * Route: Extract filmstrip frames for visual timeline
+ * Route: Extract filmstrip frames for visual timeline (supports full video or clip range [start, end])
  */
 app.get('/api/thumbnails', async (req, res) => {
   try {
     const filePath = req.query.path;
-    const count = parseInt(req.query.count) || 36;
+    const count = Math.max(1, Math.min(100, parseInt(req.query.count) || 36));
     if (!filePath || !fs.existsSync(filePath)) {
       return res.status(404).json({ error: 'File not found' });
-    }
-
-    const baseName = path.basename(filePath, path.extname(filePath)).replace(/[^a-zA-Z0-9_-]/g, '_');
-    const thumbSubDir = `thumbs_${baseName}_c${count}`;
-    const thumbDir = path.join(TEMP_DIR, thumbSubDir);
-    if (!fs.existsSync(thumbDir)) fs.mkdirSync(thumbDir, { recursive: true });
-
-    const existing = fs.readdirSync(thumbDir).filter(f => f.endsWith('.jpg'));
-    if (existing.length >= count) {
-      const urls = existing.sort().map(f => `/temp/${thumbSubDir}/${f}`);
-      return res.json({ thumbnails: urls });
     }
 
     const meta = await probeVideo(filePath);
     const duration = meta.duration || 10;
 
+    const hasRange = req.query.start !== undefined && req.query.end !== undefined;
+    const start = hasRange ? Math.max(0, Math.min(duration, parseFloat(req.query.start) || 0)) : 0;
+    const end = hasRange ? Math.max(start + 0.05, Math.min(duration, parseFloat(req.query.end) || duration)) : duration;
+    const clipDur = Math.max(0.05, end - start);
+
+    const baseName = path.basename(filePath, path.extname(filePath)).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const thumbSubDir = hasRange
+      ? `thumbs_${baseName}_s${Math.round(start * 100)}_e${Math.round(end * 100)}_c${count}`
+      : `thumbs_${baseName}_c${count}`;
+    const thumbDir = path.join(TEMP_DIR, thumbSubDir);
+    if (!fs.existsSync(thumbDir)) fs.mkdirSync(thumbDir, { recursive: true });
+
+    const existing = fs.readdirSync(thumbDir).filter(f => f.endsWith('.jpg')).sort();
+    if (existing.length >= count) {
+      const urls = existing.slice(0, count).map(f => `/temp/${thumbSubDir}/${f}`);
+      return res.json({ thumbnails: urls });
+    }
+
+    // Fast Single-Pass Extraction for clip ranges (<= 300 seconds)
+    if (hasRange && clipDur <= 300 && count > 1) {
+      const fps = Math.max(0.01, count / clipDur);
+      const outPattern = path.join(thumbDir, 'thumb_%03d.jpg');
+
+      await new Promise(resolve => {
+        const proc = spawn(FFMPEG_PATH, [
+          '-y',
+          '-ss', String(start),
+          '-to', String(end),
+          '-i', filePath,
+          '-vf', `fps=${fps},scale=240:135`,
+          '-frames:v', String(count),
+          '-q:v', '3',
+          outPattern
+        ]);
+        proc.on('close', resolve);
+        proc.on('error', resolve);
+      });
+
+      const generated = fs.readdirSync(thumbDir).filter(f => f.endsWith('.jpg')).sort();
+      if (generated.length > 0) {
+        const urls = generated.map(f => `/temp/${thumbSubDir}/${f}`);
+        return res.json({ thumbnails: urls });
+      }
+    }
+
+    // Precise Multi-worker Extraction (No -noaccurate_seek for frame-accurate results)
     const items = [];
     for (let i = 0; i < count; i++) {
-      const time = Math.max(0, Math.min(duration - 0.5, (i / (count - 1)) * (duration - 1)));
+      const time = hasRange
+        ? start + (count > 1 ? (i / (count - 1)) * Math.max(0.01, clipDur - 0.05) : 0)
+        : (count > 1 ? (i / (count - 1)) * Math.max(0.01, duration - 0.05) : 0);
       const fileName = `thumb_${String(i).padStart(3, '0')}.jpg`;
       const outPath = path.join(thumbDir, fileName);
       items.push({ index: i, time, fileName, outPath });
@@ -347,11 +384,10 @@ app.get('/api/thumbnails', async (req, res) => {
           const proc = spawn(FFMPEG_PATH, [
             '-y',
             '-ss', String(item.time),
-            '-noaccurate_seek',
             '-i', filePath,
             '-frames:v', '1',
             '-vf', 'scale=240:135',
-            '-q:v', '5',
+            '-q:v', '3',
             '-threads', '2',
             item.outPath
           ]);
@@ -379,6 +415,49 @@ app.get('/api/thumbnails', async (req, res) => {
   } catch (err) {
     console.error('Thumbnails error:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Route: Extract exact single frame at timestamp (on-demand frame accuracy)
+ */
+app.get('/api/frame', async (req, res) => {
+  try {
+    const filePath = req.query.path;
+    const time = Math.max(0, parseFloat(req.query.time) || 0);
+    if (!filePath || !fs.existsSync(filePath)) {
+      return res.status(404).send('File not found');
+    }
+    const baseName = path.basename(filePath, path.extname(filePath)).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const frameFile = `frame_${baseName}_t${Math.round(time * 100)}.jpg`;
+    const framePath = path.join(TEMP_DIR, frameFile);
+
+    if (fs.existsSync(framePath)) {
+      return res.sendFile(frameFile, { root: TEMP_DIR });
+    }
+
+    const proc = spawn(FFMPEG_PATH, [
+      '-y',
+      '-ss', String(time),
+      '-i', filePath,
+      '-frames:v', '1',
+      '-vf', 'scale=240:135',
+      '-q:v', '3',
+      '-threads', '2',
+      framePath
+    ]);
+    proc.on('close', (code) => {
+      if (code === 0 && fs.existsSync(framePath)) {
+        res.sendFile(frameFile, { root: TEMP_DIR });
+      } else {
+        res.status(500).send('Frame extraction failed');
+      }
+    });
+    proc.on('error', (err) => {
+      res.status(500).send(err.message);
+    });
+  } catch (err) {
+    res.status(500).send(err.message);
   }
 });
 

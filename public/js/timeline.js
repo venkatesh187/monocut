@@ -350,7 +350,8 @@ class Timeline {
       sourcePath: meta.filePath || meta.fileName,
       sourceUri: streamUri,
       sourceDuration: this.sourceDuration,
-      thumbnails: []
+      thumbnails: [],
+      clipThumbnails: null
     };
 
     this.segments = [firstSeg];
@@ -381,7 +382,7 @@ class Timeline {
         })
         .catch(e => console.log('Thumbnail fetch note:', e));
     }
-    this.extractInHouseThumbnails(firstSeg, 24);
+    this.loadClipThumbnails(firstSeg);
   }
 
   addVideoClip(meta, append = true) {
@@ -401,7 +402,8 @@ class Timeline {
       sourceUri: streamUri,
       sourceDuration: dur,
       name: clipName,
-      thumbnails: []
+      thumbnails: [],
+      clipThumbnails: null
     };
 
     if (append) {
@@ -435,7 +437,7 @@ class Timeline {
         })
         .catch(() => {});
     }
-    this.extractInHouseThumbnails(newSeg, 24);
+    this.loadClipThumbnails(newSeg);
   }
 
   recalculateSequenceDuration() {
@@ -768,17 +770,30 @@ class Timeline {
     this.hoverTimecode.textContent = this.player.formatTimecode(targetSeqTime);
 
     // Frame thumbnail display with LRU In-Memory Cache (200 items)
-    const clipThumbs = (targetSeg && targetSeg.thumbnails && targetSeg.thumbnails.length > 0) ? targetSeg.thumbnails : this.thumbnails;
-    const clipSrcDur = (targetSeg && targetSeg.sourceDuration) || this.sourceDuration || 1;
-    if (clipThumbs && clipThumbs.length > 0) {
+    let thumbUrl = null;
+    if (targetSeg && Array.isArray(targetSeg.clipThumbnails) && targetSeg.clipThumbnails.length > 0) {
+      const segDur = Math.max(0.01, targetSeg.end - targetSeg.start);
+      const progressInSeg = Math.max(0, Math.min(1, (sourceTime - targetSeg.start) / segDur));
       const thumbIdx = Math.min(
-        clipThumbs.length - 1,
-        Math.max(0, Math.floor((sourceTime / clipSrcDur) * clipThumbs.length))
+        targetSeg.clipThumbnails.length - 1,
+        Math.max(0, Math.floor(progressInSeg * targetSeg.clipThumbnails.length))
       );
-      const cacheKey = `${targetSeg ? targetSeg.id : 'base'}_${thumbIdx}`;
-      let thumbUrl = this.hoverThumbCache.get(cacheKey);
-      if (!thumbUrl) {
+      thumbUrl = targetSeg.clipThumbnails[thumbIdx];
+    } else {
+      const clipThumbs = (targetSeg && targetSeg.thumbnails && targetSeg.thumbnails.length > 0) ? targetSeg.thumbnails : this.thumbnails;
+      const clipSrcDur = (targetSeg && targetSeg.sourceDuration) || this.sourceDuration || 1;
+      if (clipThumbs && clipThumbs.length > 0) {
+        const thumbIdx = Math.min(
+          clipThumbs.length - 1,
+          Math.max(0, Math.floor((sourceTime / clipSrcDur) * clipThumbs.length))
+        );
         thumbUrl = clipThumbs[thumbIdx];
+      }
+    }
+
+    if (thumbUrl) {
+      const cacheKey = `${targetSeg ? targetSeg.id : 'base'}_${thumbUrl}`;
+      if (!this.hoverThumbCache.has(cacheKey)) {
         if (this.hoverThumbCache.size >= 200) {
           const oldestKey = this.hoverThumbCache.keys().next().value;
           this.hoverThumbCache.delete(oldestKey);
@@ -911,15 +926,30 @@ class Timeline {
         if (this.playheadLiveBadge) {
           this.playheadLiveBadge.textContent = this.player.formatTimecode(clampedSeq);
         }
-        const clipThumbs = (seg && seg.thumbnails && seg.thumbnails.length > 0) ? seg.thumbnails : this.thumbnails;
-        const clipSrcDur = (seg && seg.sourceDuration) || this.sourceDuration || 1;
-        if (this.playheadThumbImg && clipThumbs && clipThumbs.length > 0) {
+        let thumbUrl = null;
+        if (seg && Array.isArray(seg.clipThumbnails) && seg.clipThumbnails.length > 0) {
+          const segDur = Math.max(0.01, seg.end - seg.start);
+          const progressInSeg = Math.max(0, Math.min(1, (sourceTime - seg.start) / segDur));
           const thumbIdx = Math.min(
-            clipThumbs.length - 1,
-            Math.max(0, Math.floor((sourceTime / clipSrcDur) * clipThumbs.length))
+            seg.clipThumbnails.length - 1,
+            Math.max(0, Math.floor(progressInSeg * seg.clipThumbnails.length))
           );
-          if (this.playheadThumbImg.src !== clipThumbs[thumbIdx]) {
-            this.playheadThumbImg.src = clipThumbs[thumbIdx];
+          thumbUrl = seg.clipThumbnails[thumbIdx];
+        } else {
+          const clipThumbs = (seg && seg.thumbnails && seg.thumbnails.length > 0) ? seg.thumbnails : this.thumbnails;
+          const clipSrcDur = (seg && seg.sourceDuration) || this.sourceDuration || 1;
+          if (clipThumbs && clipThumbs.length > 0) {
+            const thumbIdx = Math.min(
+              clipThumbs.length - 1,
+              Math.max(0, Math.floor((sourceTime / clipSrcDur) * clipThumbs.length))
+            );
+            thumbUrl = clipThumbs[thumbIdx];
+          }
+        }
+
+        if (this.playheadThumbImg && thumbUrl) {
+          if (this.playheadThumbImg.src !== thumbUrl) {
+            this.playheadThumbImg.src = thumbUrl;
           }
           this.playheadThumbImg.style.display = 'block';
         } else if (this.playheadThumbImg) {
@@ -1074,7 +1104,8 @@ class Timeline {
       id: newIdA,
       start: seg.start,
       end: splitTime,
-      name: `${cleanBaseName} (Part 1)`
+      name: `${cleanBaseName} (Part 1)`,
+      clipThumbnails: null
     };
 
     const segB = {
@@ -1082,7 +1113,8 @@ class Timeline {
       id: newIdB,
       start: splitTime,
       end: seg.end,
-      name: `${cleanBaseName} (Part 2)`
+      name: `${cleanBaseName} (Part 2)`,
+      clipThumbnails: null
     };
 
     // Splice split clips into sequence
@@ -1093,6 +1125,10 @@ class Timeline {
     this.recalculateSequenceDuration();
     this.pushHistory();
     this.render();
+
+    // Fetch dedicated accurate thumbnails for both split segments
+    this.loadClipThumbnails(segA);
+    this.loadClipThumbnails(segB);
 
     // Lock playhead position directly on presentation time without issuing a jarring seek
     this.onPlayerTimeUpdate(curSourceTime);
@@ -1204,9 +1240,11 @@ class Timeline {
     const frameMargin = Math.max(0.016, 1 / (this.player.fps || 60));
     if (time > seg.start && time < (seg.end - frameMargin)) {
       seg.start = time;
+      seg.clipThumbnails = null;
       this.recalculateSequenceDuration();
       this.pushHistory();
       this.render();
+      this.loadClipThumbnails(seg);
       this.selectClipEnd(seg.id, 'start');
       this.showTimelineNotice("Trimmed start to playhead [ [ ]");
     } else {
@@ -1225,9 +1263,11 @@ class Timeline {
     const frameMargin = Math.max(0.016, 1 / (this.player.fps || 60));
     if (time < seg.end && time > (seg.start + frameMargin)) {
       seg.end = time;
+      seg.clipThumbnails = null;
       this.recalculateSequenceDuration();
       this.pushHistory();
       this.render();
+      this.loadClipThumbnails(seg);
       this.selectClipEnd(seg.id, 'end');
       this.showTimelineNotice("Trimmed end to playhead [ ] ]");
     } else {
@@ -1628,17 +1668,61 @@ class Timeline {
     for (const seg of this.segments) {
       const canvas = document.getElementById(`filmstrip_${seg.id}`);
       if (canvas) {
-        const clipDuration = Math.max(0.1, seg.end - seg.start);
-        this.drawClipFilmstrip(canvas, seg, clipDuration, totalTrackWidth);
+        const segSpeed = seg.speed || 1.0;
+        const visualDuration = Math.max(0.05, (seg.end - seg.start) / segSpeed);
+        this.drawClipFilmstrip(canvas, seg, visualDuration, totalTrackWidth);
       }
     }
   }
 
+  loadClipThumbnails(seg, requestedCount) {
+    if (!seg) return;
+    const dur = Math.max(0.1, seg.end - seg.start);
+    const count = requestedCount || Math.min(36, Math.max(8, Math.round(dur * 2)));
+
+    if (!this.pendingThumbRequests) {
+      this.pendingThumbRequests = new Set();
+    }
+    const cacheKey = `${seg.sourcePath || 'src'}_${Math.round(seg.start * 100)}_${Math.round(seg.end * 100)}_${count}`;
+    if (this.pendingThumbRequests.has(cacheKey)) {
+      return;
+    }
+    this.pendingThumbRequests.add(cacheKey);
+
+    // 1. In-browser instant offscreen extraction (provides immediate frames locally while server finishes)
+    this.extractInHouseThumbnails(seg, Math.min(count, 16));
+
+    // 2. Server-side high quality extraction
+    if (seg.sourcePath && !seg.sourcePath.startsWith('blob:')) {
+      const url = `/api/thumbnails?path=${encodeURIComponent(seg.sourcePath)}&start=${seg.start}&end=${seg.end}&count=${count}`;
+      fetch(url)
+        .then(r => r.json())
+        .then(data => {
+          this.pendingThumbRequests.delete(cacheKey);
+          if (data && data.thumbnails && data.thumbnails.length > 0) {
+            seg.clipThumbnails = data.thumbnails;
+            data.thumbnails.forEach(u => this.getCachedImage(u));
+            const canvas = document.getElementById(`filmstrip_${seg.id}`);
+            if (canvas) {
+              const segSpeed = seg.speed || 1.0;
+              const visualDuration = Math.max(0.05, (seg.end - seg.start) / segSpeed);
+              this.drawClipFilmstrip(canvas, seg, visualDuration);
+            }
+          }
+        })
+        .catch(() => {
+          this.pendingThumbRequests.delete(cacheKey);
+        });
+    }
+  }
+
   drawClipFilmstrip(canvas, seg, clipDuration, totalTrackWidth) {
-    if (!canvas) return;
+    if (!canvas || !seg) return;
     const dpr = window.devicePixelRatio || 1;
     const trackWidth = totalTrackWidth || this.getTrackWidth();
-    const cssWidth = Math.max(40, (clipDuration / Math.max(0.001, this.totalDuration)) * trackWidth);
+    const segSpeed = seg.speed || 1.0;
+    const visualDuration = Math.max(0.05, (seg.end - seg.start) / segSpeed);
+    const cssWidth = Math.max(40, (visualDuration / Math.max(0.001, this.totalDuration)) * trackWidth);
     const cssHeight = 60;
 
     const targetW = Math.round(cssWidth * dpr);
@@ -1656,24 +1740,44 @@ class Timeline {
     ctx.fillStyle = '#111118';
     ctx.fillRect(0, 0, cssWidth, cssHeight);
 
-    const clipThumbs = (seg.thumbnails && seg.thumbnails.length > 0) ? seg.thumbnails : this.thumbnails;
-    const clipSrcDur = seg.sourceDuration || this.sourceDuration || 1;
-
     // Standard 16:9 frame width (~84px cells)
     const cellWidth = 84;
     const frameCount = Math.max(1, Math.ceil(cssWidth / cellWidth));
     const actualCellW = cssWidth / frameCount;
 
+    // Check available thumbnails: clip-specific frames take highest priority
+    const hasClipThumbs = Array.isArray(seg.clipThumbnails) && seg.clipThumbnails.length > 0;
+    const clipThumbs = hasClipThumbs ? seg.clipThumbnails : ((seg.thumbnails && seg.thumbnails.length > 0) ? seg.thumbnails : this.thumbnails);
+    const clipSrcDur = seg.sourceDuration || this.sourceDuration || 1;
+
+    // Asynchronously load dedicated range thumbnails if not yet present
+    const requestKey = `${seg.sourcePath || 'src'}_${Math.round(seg.start * 100)}_${Math.round(seg.end * 100)}_${frameCount}`;
+    if (!hasClipThumbs && (!this.pendingThumbRequests || !this.pendingThumbRequests.has(requestKey))) {
+      this.loadClipThumbnails(seg, frameCount);
+    }
+
     if (clipThumbs && clipThumbs.length > 0) {
       const totalThumbs = clipThumbs.length;
       for (let f = 0; f < frameCount; f++) {
         const frameProgress = (f + 0.5) / frameCount;
-        const frameTime = seg.start + (frameProgress * clipDuration);
-        const thumbIdx = Math.min(
-          totalThumbs - 1,
-          Math.max(0, Math.floor((frameTime / clipSrcDur) * totalThumbs))
-        );
-        const thumbUrl = clipThumbs[thumbIdx];
+        let thumbUrl;
+
+        if (hasClipThumbs) {
+          // Exactly mapped within this clip's trimmed range!
+          const thumbIdx = Math.min(
+            totalThumbs - 1,
+            Math.max(0, Math.floor(frameProgress * totalThumbs))
+          );
+          thumbUrl = clipThumbs[thumbIdx];
+        } else {
+          // Fallback mapped across the entire source video
+          const sourceTime = seg.start + (frameProgress * Math.max(0.01, seg.end - seg.start));
+          const thumbIdx = Math.min(
+            totalThumbs - 1,
+            Math.max(0, Math.floor((sourceTime / clipSrcDur) * totalThumbs))
+          );
+          thumbUrl = clipThumbs[thumbIdx];
+        }
 
         const img = this.getCachedImage(thumbUrl, () => {
           this.scheduleFilmstripRedraw();
@@ -1681,7 +1785,7 @@ class Timeline {
 
         const x = f * actualCellW;
         if (img && img.complete && img.naturalWidth > 0) {
-          // Calculate Aspect Fill / Cover crop so frame never distorts
+          // Aspect Fill / Cover crop so frame never distorts
           const imgAspect = img.naturalWidth / img.naturalHeight;
           const cellAspect = actualCellW / cssHeight;
           let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
@@ -1696,7 +1800,7 @@ class Timeline {
 
           ctx.drawImage(img, sx, sy, sw, sh, x, 0, actualCellW, cssHeight);
         } else {
-          // Elegant frame cell gradient
+          // Frame cell gradient
           const cellGrad = ctx.createLinearGradient(x, 0, x + actualCellW, cssHeight);
           cellGrad.addColorStop(0, '#151520');
           cellGrad.addColorStop(1, '#1e1e2c');
@@ -1704,7 +1808,7 @@ class Timeline {
           ctx.fillRect(x, 0, actualCellW, cssHeight);
         }
 
-        // Draw crisp recessed filmstrip frame divider
+        // Crisp recessed filmstrip frame divider
         if (f > 0) {
           ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
           ctx.fillRect(x - 1, 0, 1, cssHeight);
@@ -1737,7 +1841,7 @@ class Timeline {
     ctx.restore();
   }
 
-  extractInHouseThumbnails(seg, count = 36) {
+  extractInHouseThumbnails(seg, count = 16) {
     if (!seg || !seg.sourceUri) return;
     try {
       const offscreenVideo = document.createElement('video');
@@ -1751,17 +1855,16 @@ class Timeline {
       offscreenCanvas.height = 135;
       const ctx = offscreenCanvas.getContext('2d');
 
-      const duration = seg.sourceDuration || this.sourceDuration || 10;
+      const clipStart = seg.start;
+      const clipEnd = seg.end;
+      const clipDur = Math.max(0.1, clipEnd - clipStart);
       const frames = [];
       let idx = 0;
 
       const captureNext = () => {
         if (idx >= count) {
-          if (frames.length > 0 && (!seg.thumbnails || seg.thumbnails.length === 0)) {
-            seg.thumbnails = frames;
-            if (seg.id === 'clip_0' && (!this.thumbnails || this.thumbnails.length === 0)) {
-              this.thumbnails = frames;
-            }
+          if (frames.length > 0 && (!seg.clipThumbnails || seg.clipThumbnails.length === 0)) {
+            seg.clipThumbnails = frames;
             this.drawAllFilmstrips();
           }
           offscreenVideo.src = '';
@@ -1769,7 +1872,7 @@ class Timeline {
           return;
         }
 
-        const targetTime = (idx / (count - 1)) * Math.max(0.1, duration - 0.2);
+        const targetTime = clipStart + ((idx + 0.5) / count) * clipDur;
         idx++;
 
         const onSeeked = () => {
@@ -1779,10 +1882,13 @@ class Timeline {
             const dataUrl = offscreenCanvas.toDataURL('image/jpeg', 0.7);
             frames.push(dataUrl);
             this.getCachedImage(dataUrl);
-            if (frames.length === 1 || frames.length % 6 === 0) {
-              if (!seg.thumbnails || seg.thumbnails.length < frames.length) {
-                seg.thumbnails = [...frames];
-                this.drawAllFilmstrips();
+            if (!seg.clipThumbnails || seg.clipThumbnails.length < frames.length) {
+              seg.clipThumbnails = [...frames];
+              const canvas = document.getElementById(`filmstrip_${seg.id}`);
+              if (canvas) {
+                const segSpeed = seg.speed || 1.0;
+                const visualDuration = Math.max(0.05, (seg.end - seg.start) / segSpeed);
+                this.drawClipFilmstrip(canvas, seg, visualDuration);
               }
             }
           } catch (e) {}
@@ -1900,11 +2006,13 @@ class Timeline {
             const newWidth = Math.max(10, initWidthPx - actualDeltaPx);
             draggedCardEl.style.left = `${newLeft}px`;
             draggedCardEl.style.width = `${newWidth}px`;
+            const segSpeed = seg.speed || 1.0;
+            const visualDur = Math.max(0.05, (seg.end - seg.start) / segSpeed);
             const badge = draggedCardEl.querySelector('.clip-duration-text');
-            if (badge) badge.textContent = `${(seg.end - seg.start).toFixed(1)}s`;
+            if (badge) badge.textContent = `${visualDur.toFixed(1)}s`;
             const curCanvas = draggedCardEl.querySelector('.clip-filmstrip-canvas');
             if (curCanvas) {
-              this.drawClipFilmstrip(curCanvas, seg, seg.end - seg.start, trackWidth);
+              this.drawClipFilmstrip(curCanvas, seg, visualDur, trackWidth);
             }
           }
 
@@ -1934,11 +2042,13 @@ class Timeline {
           if (draggedCardEl) {
             const newWidth = Math.max(10, initWidthPx + actualDeltaPx);
             draggedCardEl.style.width = `${newWidth}px`;
+            const segSpeed = seg.speed || 1.0;
+            const visualDur = Math.max(0.05, (seg.end - seg.start) / segSpeed);
             const badge = draggedCardEl.querySelector('.clip-duration-text');
-            if (badge) badge.textContent = `${(seg.end - seg.start).toFixed(1)}s`;
+            if (badge) badge.textContent = `${visualDur.toFixed(1)}s`;
             const curCanvas = draggedCardEl.querySelector('.clip-filmstrip-canvas');
             if (curCanvas) {
-              this.drawClipFilmstrip(curCanvas, seg, seg.end - seg.start, trackWidth);
+              this.drawClipFilmstrip(curCanvas, seg, visualDur, trackWidth);
             }
           }
 
@@ -1997,7 +2107,9 @@ class Timeline {
         this.recalculateSequenceDuration();
 
         if (hasMoved) {
+          seg.clipThumbnails = null;
           this.pushHistory();
+          this.loadClipThumbnails(seg);
         }
 
         // Full clean render on release
